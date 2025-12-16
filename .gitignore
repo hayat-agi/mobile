@@ -100,3 +100,6 @@ flutter_*.log
 # OS files
 Thumbs.db
 .DS_Store
+
+# Documents
+*.pdf
