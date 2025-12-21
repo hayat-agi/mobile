@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../ble/ble_service_stub.dart';
+import '../ble/ble_service.dart';
 import '../../core/routing/app_router.dart';
 
 class DisasterHomePage extends StatefulWidget {
@@ -12,8 +12,7 @@ class DisasterHomePage extends StatefulWidget {
 
 class _DisasterHomePageState extends State<DisasterHomePage> {
   final TextEditingController _messageController = TextEditingController();
-  final BleServiceStub _bleService = BleServiceStub();
-  final String _connectionStatus = "Gateway'e bağlı değilsin, mesaj sıraya alındı";
+  final BleService _bleService = BleService();
   bool _isSending = false;
 
   @override
@@ -29,11 +28,23 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
         systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
+    
+    // Listen to connection status changes
+    _bleService.isConnected.addListener(_updateConnectionStatus);
+    _bleService.status.addListener(_updateConnectionStatus);
+  }
+  
+  void _updateConnectionStatus() {
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
     _messageController.dispose();
+    _bleService.isConnected.removeListener(_updateConnectionStatus);
+    _bleService.status.removeListener(_updateConnectionStatus);
     super.dispose();
   }
 
@@ -110,14 +121,66 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
               children: [
                 SizedBox(height: screenHeight * 0.02),
                 // Bağlantı Durumu - Çok Net Metin
-                Text(
-                  _connectionStatus,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white70,
-                  ),
+                ValueListenableBuilder<String>(
+                  valueListenable: _bleService.status,
+                  builder: (context, status, _) {
+                    final isConnected = _bleService.isConnected.value;
+                    final statusText = isConnected
+                        ? "Gateway'e bağlısın"
+                        : "Gateway'e bağlı değilsin, mesaj sıraya alındı";
+                    return Column(
+                      children: [
+                        Text(
+                          statusText,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: isConnected ? Colors.green : Colors.white70,
+                          ),
+                        ),
+                        if (!isConnected && !_bleService.isScanning.value)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: ElevatedButton(
+                              onPressed: _bleService.scanDevices,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue,
+                                foregroundColor: Colors.white,
+                              ),
+                              child: const Text('Cihaz Ara'),
+                            ),
+                          ),
+                        if (_bleService.isScanning.value)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8.0),
+                            child: Text(
+                              'Cihazlar aranıyor...',
+                              style: TextStyle(color: Colors.blue),
+                            ),
+                          ),
+                        if (!isConnected && _bleService.results.value.isNotEmpty)
+                          ..._bleService.results.value.take(3).map((result) {
+                            final name = result.device.platformName.isNotEmpty
+                                ? result.device.platformName
+                                : result.advertisementData.advName;
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 4.0),
+                              child: ElevatedButton(
+                                onPressed: () => _bleService.connect(result),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.grey.shade800,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: Text(
+                                  name.isEmpty ? 'Bilinmeyen Cihaz' : name,
+                                ),
+                              ),
+                            );
+                          }),
+                      ],
+                    );
+                  },
                 ),
                 SizedBox(height: screenHeight * 0.06),
                 // Tek Büyük SOS Gönder Butonu

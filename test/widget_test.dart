@@ -7,7 +7,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:ble_message/app.dart';
+import 'package:hayat_agi_mobile/app.dart';
 
 void main() {
   testWidgets('App starts with onboarding page', (WidgetTester tester) async {
