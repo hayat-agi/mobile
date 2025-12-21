@@ -11,7 +11,7 @@ class MyApp extends StatelessWidget {
       title: 'Hayat Ağı',
       theme: AppTheme.theme,
       onGenerateRoute: AppRouter.generateRoute,
-      initialRoute: AppRouter.onboarding,
+      initialRoute: AppRouter.dashboard,
     );
   }
 }

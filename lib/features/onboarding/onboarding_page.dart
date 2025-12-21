@@ -21,7 +21,7 @@ class OnboardingPage extends StatelessWidget {
             const SizedBox(height: 32),
             ElevatedButton(
               onPressed: () {
-                Navigator.pushNamed(context, AppRouter.disasterHome);
+                Navigator.pushReplacementNamed(context, AppRouter.dashboard);
               },
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(
@@ -29,7 +29,7 @@ class OnboardingPage extends StatelessWidget {
                   vertical: 16,
                 ),
               ),
-              child: const Text('Afet Moduna Geç'),
+              child: const Text('Başla'),
             ),
           ],
         ),
