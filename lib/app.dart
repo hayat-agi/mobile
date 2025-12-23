@@ -9,9 +9,12 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Hayat Ağı',
-      theme: AppTheme.theme,
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.system, // Can be changed later via settings
       onGenerateRoute: AppRouter.generateRoute,
       initialRoute: AppRouter.dashboard,
+      debugShowCheckedModeBanner: false,
     );
   }
 }

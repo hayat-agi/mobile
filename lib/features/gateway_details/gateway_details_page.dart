@@ -1,6 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../models/gateway.dart';
 import '../../services/gateway_service.dart';
+import '../../core/routing/app_router.dart';
+import '../../core/widgets/app_scaffold.dart';
+import '../../core/widgets/modern_card.dart';
+import '../../core/widgets/status_pill.dart';
+import '../../core/widgets/section_header.dart';
+import '../../core/widgets/primary_button.dart';
+import '../../core/widgets/secondary_button.dart';
+import '../../core/widgets/danger_button.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_typography.dart';
 
 class GatewayDetailsPage extends StatefulWidget {
   final String gatewayId;
@@ -17,435 +29,17 @@ class GatewayDetailsPage extends StatefulWidget {
 class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
   final GatewayService _gatewayService = GatewayService();
 
-  @override
-  Widget build(BuildContext context) {
-    final gateway = _gatewayService.getGateway(widget.gatewayId);
-
-    if (gateway == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Gateway Detayları')),
-        body: const Center(
-          child: Text('Gateway bulunamadı'),
-        ),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(gateway.name),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            onPressed: () => _showDeleteDialog(gateway),
-          ),
-        ],
-      ),
-      body: ValueListenableBuilder<List<Gateway>>(
-        valueListenable: _gatewayService.gateways,
-        builder: (context, gateways, _) {
-          final updatedGateway = _gatewayService.getGateway(widget.gatewayId);
-          if (updatedGateway == null) {
-            Navigator.pop(context);
-            return const SizedBox.shrink();
-          }
-
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Status Card
-                _buildStatusCard(updatedGateway),
-                const SizedBox(height: 16),
-
-                // Connection Info
-                _buildSectionTitle('Bağlantı Bilgileri'),
-                _buildInfoCard([
-                  _buildInfoRow('Durum', updatedGateway.status.displayName,
-                      _getStatusColor(updatedGateway.status)),
-                  _buildInfoRow('Gateway ID', updatedGateway.id, null),
-                  if (updatedGateway.macAddress != null)
-                    _buildInfoRow('MAC Adresi', updatedGateway.macAddress!, null),
-                  if (updatedGateway.connectedAt != null)
-                    _buildInfoRow(
-                        'Bağlanma Zamanı',
-                        _formatDateTime(updatedGateway.connectedAt!),
-                        null),
-                  if (updatedGateway.lastSeen != null)
-                    _buildInfoRow('Son Görülme',
-                        _formatLastSeen(updatedGateway.lastSeen!), null),
-                ]),
-                const SizedBox(height: 16),
-                
-                // Address Information
-                if (updatedGateway.hasCompleteAddress) ...[
-                  _buildSectionTitle('Adres Bilgileri'),
-                  _buildInfoCard([
-                    if (updatedGateway.buildingType != null)
-                      _buildInfoRow('Bina Tipi', 
-                          updatedGateway.buildingType!.displayName, null),
-                    if (updatedGateway.street != null)
-                      _buildInfoRow('Sokak/Cadde', updatedGateway.street!, null),
-                    if (updatedGateway.buildingNumber != null)
-                      _buildInfoRow('Bina No', updatedGateway.buildingNumber!, null),
-                    if (updatedGateway.doorNumber != null)
-                      _buildInfoRow('Kapı No', updatedGateway.doorNumber!, null),
-                    if (updatedGateway.district != null)
-                      _buildInfoRow('İlçe', updatedGateway.district!, null),
-                    if (updatedGateway.city != null)
-                      _buildInfoRow('İl', updatedGateway.city!, null),
-                    if (updatedGateway.postalCode != null)
-                      _buildInfoRow('Posta Kodu', updatedGateway.postalCode!, null),
-                    if (updatedGateway.latitude != null && updatedGateway.longitude != null)
-                      _buildInfoRow('Koordinatlar', 
-                          '${updatedGateway.latitude!.toStringAsFixed(6)}, ${updatedGateway.longitude!.toStringAsFixed(6)}', null),
-                  ]),
-                ] else if (updatedGateway.street != null || updatedGateway.city != null) ...[
-                  _buildSectionTitle('Adres Bilgileri'),
-                  _buildInfoCard([
-                    _buildInfoRow('Adres', updatedGateway.formattedAddress, null),
-                  ]),
-                ],
-                const SizedBox(height: 16),
-
-                // Battery & Signal
-                _buildSectionTitle('Performans'),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildBatteryCard(updatedGateway.batteryLevel),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildSignalCard(updatedGateway.signalStrength),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Statistics
-                _buildSectionTitle('İstatistikler'),
-                _buildInfoCard([
-                  _buildInfoRow('Gönderilen Mesaj',
-                      updatedGateway.messagesSent.toString(), null),
-                  _buildInfoRow('Alınan Mesaj',
-                      updatedGateway.messagesReceived.toString(), null),
-                ]),
-                const SizedBox(height: 24),
-
-                // Actions
-                _buildSectionTitle('İşlemler'),
-                if (updatedGateway.isConnected)
-                  _buildActionButton(
-                    'Bağlantıyı Kes',
-                    Icons.link_off,
-                    Colors.red,
-                    () => _disconnectGateway(updatedGateway),
-                  )
-                else
-                  _buildActionButton(
-                    'Bağlan',
-                    Icons.link,
-                    Colors.green,
-                    () => _connectGateway(updatedGateway),
-                  ),
-                const SizedBox(height: 12),
-                _buildActionButton(
-                  'Gateway\'i Kaldır',
-                  Icons.delete_outline,
-                  Colors.red,
-                  () => _showDeleteDialog(updatedGateway),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildStatusCard(Gateway gateway) {
-    return Card(
-      color: _getStatusColor(gateway.status).withValues(alpha: 0.1),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 30,
-              backgroundColor: _getStatusColor(gateway.status).withValues(alpha: 0.2),
-              child: Icon(
-                _getStatusIcon(gateway.status),
-                color: _getStatusColor(gateway.status),
-                size: 32,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    gateway.name,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    gateway.status.displayName,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: _getStatusColor(gateway.status),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSectionTitle(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInfoCard(List<Widget> children) {
-    return Card(
-      child: Column(
-        children: children,
-      ),
-    );
-  }
-
-  Widget _buildInfoRow(String label, String value, Color? valueColor) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 14,
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              color: valueColor,
-              fontSize: 14,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBatteryCard(int batteryLevel) {
-    Color color;
-    IconData icon;
-
-    if (batteryLevel > 50) {
-      color = Colors.green;
-      icon = Icons.battery_full;
-    } else if (batteryLevel > 20) {
-      color = Colors.orange;
-      icon = Icons.battery_3_bar;
-    } else {
-      color = Colors.red;
-      icon = Icons.battery_alert;
-    }
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Icon(icon, size: 48, color: color),
-            const SizedBox(height: 8),
-            Text(
-              '$batteryLevel%',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Batarya',
-              style: TextStyle(fontSize: 12),
-            ),
-            const SizedBox(height: 8),
-            LinearProgressIndicator(
-              value: batteryLevel / 100,
-              backgroundColor: color.withValues(alpha: 0.2),
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSignalCard(int? signalStrength) {
-    if (signalStrength == null) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              Icon(Icons.signal_cellular_off, size: 48, color: Colors.grey),
-              const SizedBox(height: 8),
-              const Text(
-                'N/A',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Sinyal',
-                style: TextStyle(fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final color = signalStrength > -70 ? Colors.green : Colors.orange;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            Icon(Icons.signal_cellular_alt, size: 48, color: color),
-            const SizedBox(height: 8),
-            Text(
-              '$signalStrength dBm',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Sinyal',
-              style: TextStyle(fontSize: 12),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActionButton(
-      String label, IconData icon, Color color, VoidCallback onPressed) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: onPressed,
-        icon: Icon(icon),
-        label: Text(label),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: color,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _connectGateway(Gateway gateway) async {
-    await _gatewayService.connectToGateway(gateway.id);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Gateway\'e bağlanılıyor...'),
-          backgroundColor: Colors.blue,
-        ),
-      );
-    }
-  }
-
-  Future<void> _disconnectGateway(Gateway gateway) async {
-    await _gatewayService.disconnectFromGateway(gateway.id);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bağlantı kesildi'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-    }
-  }
-
-  void _showDeleteDialog(Gateway gateway) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Gateway\'i Kaldır'),
-        content: Text('${gateway.name} gateway\'ini kaldırmak istediğinize emin misiniz?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('İptal'),
-          ),
-          TextButton(
-            onPressed: () async {
-              final navigator = Navigator.of(context);
-              final messenger = ScaffoldMessenger.of(context);
-              await _gatewayService.removeGateway(gateway.id);
-              if (mounted) {
-                navigator.pop(); // Close dialog
-                navigator.pop(); // Go back to dashboard
-                messenger.showSnackBar(
-                  const SnackBar(
-                    content: Text('Gateway kaldırıldı'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              }
-            },
-            child: const Text('Kaldır', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Color _getStatusColor(GatewayStatus status) {
+  StatusType _getStatusType(GatewayStatus status) {
     switch (status) {
       case GatewayStatus.connected:
-        return Colors.green;
+        return StatusType.success;
       case GatewayStatus.disconnected:
-        return Colors.grey;
-      case GatewayStatus.scanning:
+        return StatusType.neutral;
       case GatewayStatus.connecting:
-        return Colors.blue;
+      case GatewayStatus.scanning:
+        return StatusType.info;
       case GatewayStatus.error:
-        return Colors.red;
+        return StatusType.danger;
     }
   }
 
@@ -483,5 +77,532 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
       return '${difference.inDays} gün önce';
     }
   }
-}
 
+  Future<void> _connectGateway(Gateway gateway) async {
+    await _gatewayService.connectToGateway(gateway.id);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Gateway\'e bağlanılıyor...'),
+          backgroundColor: AppColors.info,
+        ),
+      );
+    }
+  }
+
+  Future<void> _disconnectGateway(Gateway gateway) async {
+    await _gatewayService.disconnectFromGateway(gateway.id);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Bağlantı kesildi'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+    }
+  }
+
+  void _showDeleteDialog(Gateway gateway) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Gateway\'i Kaldır'),
+        content: Text(
+          '${gateway.name} gateway\'ini kaldırmak istediğinize emin misiniz?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('İptal'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final navigator = Navigator.of(context);
+              final messenger = ScaffoldMessenger.of(context);
+              await _gatewayService.removeGateway(gateway.id);
+              if (mounted) {
+                navigator.pop(); // Close dialog
+                navigator.pop(); // Go back to dashboard
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: const Text('Gateway kaldırıldı'),
+                    backgroundColor: AppColors.success,
+                  ),
+                );
+              }
+            },
+            child: const Text('Kaldır', style: TextStyle(color: AppColors.danger)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _copyToClipboard(String text, String label) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$label panoya kopyalandı'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gateway = _gatewayService.getGateway(widget.gatewayId);
+
+    if (gateway == null) {
+      return AppScaffold(
+        title: 'Gateway Detayları',
+        body: const Center(
+          child: Text('Gateway bulunamadı'),
+        ),
+      );
+    }
+
+    return AppScaffold(
+      title: gateway.name,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.delete_outline),
+          onPressed: () => _showDeleteDialog(gateway),
+        ),
+      ],
+      body: ValueListenableBuilder<List<Gateway>>(
+        valueListenable: _gatewayService.gateways,
+        builder: (context, gateways, _) {
+          final updatedGateway = _gatewayService.getGateway(widget.gatewayId);
+          if (updatedGateway == null) {
+            Navigator.pop(context);
+            return const SizedBox.shrink();
+          }
+
+          return Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(AppSpacing.screenPadding),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Hero Header
+                      _buildHeroHeader(updatedGateway, context),
+                      const SizedBox(height: AppSpacing.lg),
+
+                      // Health Section
+                      SectionHeader(
+                        title: 'Sağlık',
+                        subtitle: 'Battery ve sinyal durumu',
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _buildHealthSection(updatedGateway, context),
+                      const SizedBox(height: AppSpacing.lg),
+
+                      // Connection Info
+                      SectionHeader(
+                        title: 'Bağlantı Bilgileri',
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _buildConnectionInfo(updatedGateway, context),
+                      const SizedBox(height: AppSpacing.lg),
+
+                      // Address Information
+                      if (updatedGateway.hasCompleteAddress ||
+                          updatedGateway.street != null ||
+                          updatedGateway.city != null) ...[
+                        SectionHeader(
+                          title: 'Adres Bilgileri',
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        _buildAddressCard(updatedGateway, context),
+                        const SizedBox(height: AppSpacing.lg),
+                      ],
+
+                      // Statistics
+                      SectionHeader(
+                        title: 'İstatistikler',
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _buildStatisticsCard(updatedGateway, context),
+                      const SizedBox(height: AppSpacing.xl),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Bottom Action Bar
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.screenPadding),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, -2),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Household Profile Button
+                      PrimaryButton(
+                        label: 'Hane Profili',
+                        icon: Icons.family_restroom,
+                        onPressed: () {
+                          Navigator.pushNamed(
+                            context,
+                            AppRouter.householdProfile,
+                            arguments: updatedGateway.id,
+                          );
+                        },
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      // Connect/Disconnect Button
+                      if (updatedGateway.isConnected)
+                        SecondaryButton(
+                          label: 'Bağlantıyı Kes',
+                          icon: Icons.link_off,
+                          onPressed: () => _disconnectGateway(updatedGateway),
+                        )
+                      else
+                        PrimaryButton(
+                          label: 'Bağlan',
+                          icon: Icons.link,
+                          onPressed: () => _connectGateway(updatedGateway),
+                        ),
+                      const SizedBox(height: AppSpacing.sm),
+                      // Remove Button
+                      DangerButton(
+                        label: 'Gateway\'i Kaldır',
+                        icon: Icons.delete_outline,
+                        isOutlined: true,
+                        onPressed: () => _showDeleteDialog(updatedGateway),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHeroHeader(Gateway gateway, BuildContext context) {
+    final theme = Theme.of(context);
+    return ModernCard(
+      color: theme.colorScheme.primaryContainer.withOpacity(0.3),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(
+              _getStatusIcon(gateway.status),
+              color: theme.colorScheme.onPrimaryContainer,
+              size: 32,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  gateway.name,
+                  style: AppTypography.headlineMedium(context),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                StatusPill(
+                  label: gateway.status.displayName,
+                  type: _getStatusType(gateway.status),
+                  icon: _getStatusIcon(gateway.status),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHealthSection(Gateway gateway, BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _buildHealthMetric(
+            context: context,
+            icon: Icons.battery_charging_full,
+            label: 'Batarya',
+            value: '${gateway.batteryLevel}%',
+            color: gateway.batteryLevel > 50
+                ? AppColors.success
+                : gateway.batteryLevel > 20
+                    ? AppColors.warning
+                    : AppColors.danger,
+            progress: gateway.batteryLevel / 100,
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: _buildHealthMetric(
+            context: context,
+            icon: Icons.signal_cellular_alt,
+            label: 'Sinyal',
+            value: gateway.signalStrength != null
+                ? '${gateway.signalStrength} dBm'
+                : 'N/A',
+            color: gateway.signalStrength != null
+                ? (gateway.hasGoodSignal ? AppColors.success : AppColors.warning)
+                : AppColors.textSecondaryLight,
+            progress: gateway.signalStrength != null
+                ? ((gateway.signalStrength! + 100) / 50).clamp(0.0, 1.0)
+                : 0.0,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHealthMetric({
+    required BuildContext context,
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+    required double progress,
+  }) {
+    return ModernCard(
+      child: Column(
+        children: [
+          Icon(icon, size: 32, color: color),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            value,
+            style: AppTypography.headlineSmall(context).copyWith(
+              color: color,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            label,
+            style: AppTypography.bodySmall(context).copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (progress > 0) ...[
+            const SizedBox(height: AppSpacing.sm),
+            LinearProgressIndicator(
+              value: progress,
+              backgroundColor: color.withOpacity(0.2),
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+              minHeight: 4,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionInfo(Gateway gateway, BuildContext context) {
+    return ModernCard(
+      child: Column(
+        children: [
+          _buildInfoRow(
+            context: context,
+            label: 'Gateway ID',
+            value: gateway.id,
+            onTap: () => _copyToClipboard(gateway.id, 'Gateway ID'),
+          ),
+          const Divider(height: 1),
+          if (gateway.macAddress != null) ...[
+            _buildInfoRow(
+              context: context,
+              label: 'MAC Adresi',
+              value: gateway.macAddress!,
+              onTap: () => _copyToClipboard(gateway.macAddress!, 'MAC Adresi'),
+            ),
+            const Divider(height: 1),
+          ],
+          if (gateway.connectedAt != null)
+            _buildInfoRow(
+              context: context,
+              label: 'Bağlanma Zamanı',
+              value: _formatDateTime(gateway.connectedAt!),
+            ),
+          if (gateway.lastSeen != null) ...[
+            if (gateway.connectedAt != null) const Divider(height: 1),
+            _buildInfoRow(
+              context: context,
+              label: 'Son Görülme',
+              value: _formatLastSeen(gateway.lastSeen!),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAddressCard(Gateway gateway, BuildContext context) {
+    final address = gateway.hasCompleteAddress
+        ? gateway.formattedAddress
+        : gateway.formattedAddress;
+
+    return ModernCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  address,
+                  style: AppTypography.bodyMedium(context),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy),
+                onPressed: () => _copyToClipboard(address, 'Adres'),
+                tooltip: 'Kopyala',
+              ),
+            ],
+          ),
+          if (gateway.latitude != null && gateway.longitude != null) ...[
+            const Divider(height: 1),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
+                Icon(
+                  Icons.location_on,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  '${gateway.latitude!.toStringAsFixed(6)}, ${gateway.longitude!.toStringAsFixed(6)}',
+                  style: AppTypography.bodySmall(context).copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatisticsCard(Gateway gateway, BuildContext context) {
+    return ModernCard(
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildStatItem(
+              context: context,
+              label: 'Gönderilen',
+              value: gateway.messagesSent.toString(),
+              icon: Icons.send,
+            ),
+          ),
+          Container(
+            width: 1,
+            height: 40,
+            color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+          ),
+          Expanded(
+            child: _buildStatItem(
+              context: context,
+              label: 'Alınan',
+              value: gateway.messagesReceived.toString(),
+              icon: Icons.inbox,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem({
+    required BuildContext context,
+    required String label,
+    required String value,
+    required IconData icon,
+  }) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Icon(icon, size: 24, color: theme.colorScheme.primary),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          value,
+          style: AppTypography.headlineSmall(context),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          label,
+          style: AppTypography.bodySmall(context).copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInfoRow({
+    required BuildContext context,
+    required String label,
+    required String value,
+    VoidCallback? onTap,
+  }) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.md,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: AppTypography.bodyMedium(context).copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            Row(
+              children: [
+                Text(
+                  value,
+                  style: AppTypography.bodyMedium(context).copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (onTap != null) ...[
+                  const SizedBox(width: AppSpacing.xs),
+                  Icon(
+                    Icons.copy,
+                    size: 16,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

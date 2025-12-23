@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../ble/ble_service.dart';
+import '../../core/widgets/empty_state.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../core/theme/app_colors.dart';
 
 class MessagesPage extends StatefulWidget {
   const MessagesPage({super.key});
@@ -51,7 +54,6 @@ class _MessagesPageState extends State<MessagesPage> {
   }
 
   String _cleanEsp32Message(String msg) {
-    // Remove common prefixes that ESP32 might send
     if (msg.startsWith('RX: ')) {
       return msg.substring(4);
     }
@@ -64,6 +66,27 @@ class _MessagesPageState extends State<MessagesPage> {
     return msg;
   }
 
+  String _getMessageType(String msg) {
+    if (msg.toLowerCase().contains('sos') || msg.toLowerCase().contains('yaral')) {
+      return 'SOS';
+    }
+    if (msg.toLowerCase().contains('güven') || msg.toLowerCase().contains('yardım')) {
+      return 'Durum';
+    }
+    return 'Normal';
+  }
+
+  Color _getMessageTypeColor(String type) {
+    switch (type) {
+      case 'SOS':
+        return AppColors.danger;
+      case 'Durum':
+        return AppColors.warning;
+      default:
+        return AppColors.info;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -72,60 +95,129 @@ class _MessagesPageState extends State<MessagesPage> {
         backgroundColor: Colors.grey.shade900,
         title: const Text('Mesajlar'),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          // TODO: Add filter button
+          IconButton(
+            icon: const Icon(Icons.filter_list),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Filtreleme yakında eklenecek'),
+                ),
+              );
+            },
+            tooltip: 'Filtrele',
+          ),
+        ],
       ),
       body: ValueListenableBuilder<List<String>>(
         valueListenable: _bleService.messages,
         builder: (context, messages, _) {
           if (messages.isEmpty) {
-            return const Center(
-              child: Text(
-                'Henüz mesaj yok',
-                style: TextStyle(color: Colors.white70, fontSize: 18),
-              ),
+            return EmptyState(
+              icon: Icons.message_outlined,
+              title: 'Henüz mesaj yok',
+              description: 'Gönderilen ve alınan mesajlar burada görünecek',
             );
           }
 
           return ListView.builder(
             controller: _scrollController,
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(AppSpacing.md),
             itemCount: messages.length,
             itemBuilder: (context, index) {
               final msg = messages[index];
               final isFromMe = msg.startsWith('ME: ');
               final displayMsg = isFromMe
-                  ? msg.substring(4) // Remove "ME: "
-                  : _cleanEsp32Message(msg.startsWith('ESP32: ') 
-                      ? msg.substring(7) 
-                      : msg); // Remove "ESP32: " and clean
+                  ? msg.substring(4)
+                  : _cleanEsp32Message(
+                      msg.startsWith('ESP32: ') ? msg.substring(7) : msg,
+                    );
+              final messageType = _getMessageType(displayMsg);
 
               return Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 4,
-                ),
-                child: Align(
-                  alignment: isFromMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isFromMe
-                          ? Colors.blue
-                          : Colors.grey.shade800,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(
-                      displayMsg,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: Row(
+                  mainAxisAlignment:
+                      isFromMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!isFromMe) ...[
+                      // Message type pill for received messages
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.xs,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _getMessageTypeColor(messageType).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          messageType,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: _getMessageTypeColor(messageType),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                    ],
+                    Flexible(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.md,
+                          vertical: AppSpacing.sm,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isFromMe
+                              ? AppColors.primary
+                              : Colors.grey.shade800,
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(16),
+                            topRight: const Radius.circular(16),
+                            bottomLeft: Radius.circular(isFromMe ? 16 : 4),
+                            bottomRight: Radius.circular(isFromMe ? 4 : 16),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              displayMsg,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // TODO: Add timestamp
+                                Text(
+                                  'Az önce', // Placeholder
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.6),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                if (isFromMe) ...[
+                                  const SizedBox(width: AppSpacing.xs),
+                                  Icon(
+                                    Icons.check_circle,
+                                    size: 12,
+                                    color: Colors.white.withOpacity(0.6),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
               );
             },
@@ -135,4 +227,3 @@ class _MessagesPageState extends State<MessagesPage> {
     );
   }
 }
-

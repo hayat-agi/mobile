@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/gateway.dart';
+import '../models/household_profile.dart';
 // import '../features/ble/ble_service.dart'; // TODO: Use for BLE integration
 
 class GatewayService {
@@ -9,6 +10,7 @@ class GatewayService {
   GatewayService._internal();
 
   final ValueNotifier<List<Gateway>> gateways = ValueNotifier<List<Gateway>>([]);
+  final Map<String, HouseholdProfile> _householdProfiles = {};
   // final BleService _bleService = BleService(); // TODO: Use for BLE integration
 
   // Initialize with empty list or load from storage
@@ -173,6 +175,33 @@ class GatewayService {
       (sum, gateway) => sum + gateway.batteryLevel,
     );
     return total / gateways.value.length;
+  }
+
+  // ---------- HOUSEHOLD PROFILE METHODS ----------
+  
+  // Save household profile for a gateway
+  Future<void> saveHouseholdProfile(HouseholdProfile profile) async {
+    final updatedProfile = profile.copyWith(
+      priorityScore: profile.calculatePriorityScore(),
+    );
+    _householdProfiles[profile.gatewayId] = updatedProfile;
+    // TODO: Save to local storage
+  }
+
+  // Get household profile for a gateway
+  HouseholdProfile? getHouseholdProfile(String gatewayId) {
+    return _householdProfiles[gatewayId];
+  }
+
+  // Check if gateway has household profile
+  bool hasHouseholdProfile(String gatewayId) {
+    return _householdProfiles.containsKey(gatewayId);
+  }
+
+  // Remove household profile
+  Future<void> removeHouseholdProfile(String gatewayId) async {
+    _householdProfiles.remove(gatewayId);
+    // TODO: Remove from local storage
   }
 
   void dispose() {

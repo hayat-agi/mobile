@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import '../../core/widgets/app_scaffold.dart';
+import '../../core/widgets/list_row.dart';
+import '../../core/widgets/section_header.dart';
+import '../../core/theme/app_spacing.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_typography.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -32,114 +38,160 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Ayarlar'),
-      ),
+    final theme = Theme.of(context);
+    
+    return AppScaffold(
+      title: 'Ayarlar',
       body: ListView(
         children: [
           // App Settings Section
-          _buildSectionHeader('Uygulama Ayarları'),
+          SectionHeader(
+            title: 'Uygulama Ayarları',
+            subtitle: 'Bildirimler ve genel ayarlar',
+          ),
           SwitchListTile(
-            title: const Text('Bildirimler'),
-            subtitle: const Text('Gateway durumu ve mesaj bildirimleri'),
+            title: Text(
+              'Bildirimler',
+              style: AppTypography.titleMedium(context),
+            ),
+            subtitle: Text(
+              'Gateway durumu ve mesaj bildirimleri',
+              style: AppTypography.bodySmall(context).copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             value: _notificationsEnabled,
             onChanged: (value) {
               setState(() {
                 _notificationsEnabled = value;
               });
             },
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.sm,
+            ),
           ),
-          const Divider(),
+          const Divider(height: 1),
 
           // Bluetooth Settings Section
-          _buildSectionHeader('Bluetooth Ayarları'),
+          SectionHeader(
+            title: 'Bluetooth Ayarları',
+            subtitle: 'Bağlantı ve otomatik bağlanma',
+          ),
           SwitchListTile(
-            title: const Text('Otomatik Bağlan'),
-            subtitle: const Text('Kayıtlı gateway\'lere otomatik bağlan'),
+            title: Text(
+              'Otomatik Bağlan',
+              style: AppTypography.titleMedium(context),
+            ),
+            subtitle: Text(
+              'Kayıtlı gateway\'lere otomatik bağlan',
+              style: AppTypography.bodySmall(context).copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             value: _autoConnect,
             onChanged: (value) {
               setState(() {
                 _autoConnect = value;
               });
             },
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.sm,
+            ),
           ),
-          const Divider(),
+          const Divider(height: 1),
 
           // About Section
-          _buildSectionHeader('Hakkında'),
-          ListTile(
-            leading: const Icon(Icons.info_outline),
-            title: const Text('Uygulama Versiyonu'),
-            subtitle: Text(_appVersion),
+          SectionHeader(
+            title: 'Hakkında',
+            subtitle: 'Uygulama bilgileri ve destek',
           ),
-          ListTile(
-            leading: const Icon(Icons.description_outlined),
-            title: const Text('Kullanım Koşulları'),
+          ListRow(
+            title: 'Uygulama Versiyonu',
+            subtitle: _appVersion,
+            leading: Icon(
+              Icons.info_outline,
+              color: theme.colorScheme.primary,
+            ),
+            onTap: null,
+            showDivider: false,
+          ),
+          const Divider(height: 1),
+          ListRow(
+            title: 'Kullanım Koşulları',
+            leading: Icon(
+              Icons.description_outlined,
+              color: theme.colorScheme.primary,
+            ),
             onTap: () {
-              // TODO: Show terms
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Yakında eklenecek')),
               );
             },
+            showDivider: false,
           ),
-          ListTile(
-            leading: const Icon(Icons.privacy_tip_outlined),
-            title: const Text('Gizlilik Politikası'),
+          const Divider(height: 1),
+          ListRow(
+            title: 'Gizlilik Politikası',
+            leading: Icon(
+              Icons.privacy_tip_outlined,
+              color: theme.colorScheme.primary,
+            ),
             onTap: () {
-              // TODO: Show privacy policy
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Yakında eklenecek')),
               );
             },
+            showDivider: false,
           ),
-          ListTile(
-            leading: const Icon(Icons.help_outline),
-            title: const Text('Yardım & Destek'),
+          const Divider(height: 1),
+          ListRow(
+            title: 'Yardım & Destek',
+            leading: Icon(
+              Icons.help_outline,
+              color: theme.colorScheme.primary,
+            ),
             onTap: () {
-              // TODO: Show help
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Yakında eklenecek')),
               );
             },
+            showDivider: false,
           ),
-          const Divider(),
+          const Divider(height: 1),
 
           // Account Section
-          _buildSectionHeader('Hesap'),
-          ListTile(
-            leading: const Icon(Icons.person_outline),
-            title: const Text('Profil'),
+          SectionHeader(
+            title: 'Hesap',
+            subtitle: 'Profil ve çıkış',
+          ),
+          ListRow(
+            title: 'Profil',
+            leading: Icon(
+              Icons.person_outline,
+              color: theme.colorScheme.primary,
+            ),
             onTap: () {
-              // TODO: Navigate to profile
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Yakında eklenecek')),
               );
             },
+            showDivider: false,
           ),
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text('Çıkış Yap', style: TextStyle(color: Colors.red)),
-            onTap: () {
-              _showLogoutDialog();
-            },
+          const Divider(height: 1),
+          ListRow(
+            title: 'Çıkış Yap',
+            leading: const Icon(
+              Icons.logout,
+              color: AppColors.danger,
+            ),
+            onTap: _showLogoutDialog,
+            showDivider: false,
+            trailing: null,
           ),
+          const SizedBox(height: AppSpacing.xl),
         ],
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.bold,
-          color: Colors.grey.shade600,
-          letterSpacing: 0.5,
-        ),
       ),
     );
   }
@@ -160,14 +212,19 @@ class _SettingsPageState extends State<SettingsPage> {
               // TODO: Implement logout
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Çıkış yapıldı')),
+                SnackBar(
+                  content: const Text('Çıkış yapıldı'),
+                  backgroundColor: AppColors.success,
+                ),
               );
             },
-            child: const Text('Çıkış Yap', style: TextStyle(color: Colors.red)),
+            child: const Text(
+              'Çıkış Yap',
+              style: TextStyle(color: AppColors.danger),
+            ),
           ),
         ],
       ),
     );
   }
 }
-

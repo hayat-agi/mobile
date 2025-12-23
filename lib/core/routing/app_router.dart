@@ -5,6 +5,7 @@ import '../../features/disaster_mode/disaster_home_page.dart';
 import '../../features/messages/messages_page.dart';
 import '../../features/settings/settings_page.dart';
 import '../../features/gateway_details/gateway_details_page.dart';
+import '../../features/household_profile/household_profile_page.dart';
 
 class AppRouter {
   static const String onboarding = '/onboarding';
@@ -13,6 +14,7 @@ class AppRouter {
   static const String messages = '/messages';
   static const String settings = '/settings';
   static const String gatewayDetails = '/gateway-details';
+  static const String householdProfile = '/household-profile';
 
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
     switch (routeSettings.name) {
@@ -30,6 +32,11 @@ class AppRouter {
         final gatewayId = routeSettings.arguments as String;
         return MaterialPageRoute(
           builder: (_) => GatewayDetailsPage(gatewayId: gatewayId),
+        );
+      case householdProfile:
+        final gatewayId = routeSettings.arguments as String;
+        return MaterialPageRoute(
+          builder: (_) => HouseholdProfilePage(gatewayId: gatewayId),
         );
       default:
         return MaterialPageRoute(
