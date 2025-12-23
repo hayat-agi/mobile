@@ -21,7 +21,6 @@ class AppTheme {
         surfaceContainerHighest: AppColors.surfaceVariantLight,
         outline: AppColors.outlineLight,
         outlineVariant: AppColors.outlineVariantLight,
-        background: AppColors.backgroundLight,
       ),
       scaffoldBackgroundColor: AppColors.backgroundLight,
       appBarTheme: AppBarTheme(
@@ -148,7 +147,6 @@ class AppTheme {
         surfaceContainerHighest: AppColors.surfaceVariantDark,
         outline: AppColors.outlineDark,
         outlineVariant: AppColors.outlineVariantDark,
-        background: AppColors.backgroundDark,
       ),
       scaffoldBackgroundColor: AppColors.backgroundDark,
       appBarTheme: AppBarTheme(

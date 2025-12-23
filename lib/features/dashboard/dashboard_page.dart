@@ -24,7 +24,7 @@ class _DashboardPageState extends State<DashboardPage> {
   final GatewayService _gatewayService = GatewayService();
   final TextEditingController _searchController = TextEditingController();
   String _filterStatus = 'all'; // all, connected, disconnected, lowBattery
-  String _sortBy = 'name'; // name, battery, signal, lastSeen
+  final String _sortBy = 'name'; // name, battery, signal, lastSeen
 
   @override
   void initState() {

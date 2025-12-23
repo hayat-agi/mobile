@@ -79,6 +79,8 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    
     return DraggableScrollableSheet(
       initialChildSize: 0.9,
       minChildSize: 0.5,
@@ -123,10 +125,12 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
               Expanded(
                 child: Form(
                   key: _formKey,
-                  child: ListView(
-                    controller: scrollController,
-                    padding: const EdgeInsets.all(AppSpacing.screenPadding),
-                    children: [
+                  child: Padding(
+                    padding: EdgeInsets.only(bottom: keyboardHeight),
+                    child: ListView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(AppSpacing.screenPadding),
+                      children: [
                       // Gateway ID
                       TextFormField(
                         controller: _gatewayIdController,
@@ -159,7 +163,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                       
                       // Building Type
                       DropdownButtonFormField<BuildingType>(
-                        value: _selectedBuildingType,
+                        initialValue: _selectedBuildingType,
                         decoration: const InputDecoration(
                           labelText: 'Bina Tipi *',
                           prefixIcon: Icon(Icons.home),
@@ -305,7 +309,8 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                         onPressed: _submit,
                       ),
                       const SizedBox(height: AppSpacing.screenPadding),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
