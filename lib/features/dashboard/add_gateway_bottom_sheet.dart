@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../core/widgets/secondary_button.dart';
 import '../../core/widgets/section_header.dart';
@@ -25,6 +27,8 @@ class AddGatewayBottomSheet extends StatefulWidget {
     String? district,
     String? city,
     String? postalCode,
+    double? latitude,
+    double? longitude,
   ) onAdd;
 
   const AddGatewayBottomSheet({
@@ -50,6 +54,8 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   final BleService _bleService = BleService();
   BuildingType? _selectedBuildingType;
   bool _showBleScan = false;
+  double? _latitude;
+  double? _longitude;
 
   @override
   void initState() {
@@ -170,7 +176,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
       // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('$deviceName başarıyla bağlandı ve form dolduruldu'),
+          content: Text('$deviceName başarıyla bağlandı'),
           backgroundColor: AppColors.success,
           duration: const Duration(seconds: 2),
         ),
@@ -191,7 +197,13 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
           duration: const Duration(seconds: 3),
         ),
       );
+      return; // Don't try GPS if connection failed
     }
+
+    // GPS konumu al ve adres alanlarını doldur
+    // Bu kısım BLE try-catch'inin DIŞINDA — kendi hata yönetimi var
+    debugPrint('[Location] _fetchAndFillLocation() CALLED');
+    await _fetchAndFillLocation();
   }
   
   /// Fill in the form with the connected device's info
@@ -208,6 +220,245 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
     }
   }
   
+  /// Fetch GPS location and reverse geocode to fill address fields.
+  Future<void> _fetchAndFillLocation() async {
+    try {
+      // Check if location service is enabled — if not, prompt user to open settings
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          final shouldOpen = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Konum Servisi Kapalı'),
+              content: const Text(
+                'Adres bilgilerini otomatik doldurmak için konum servisini açmanız gerekiyor.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Geç'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Ayarları Aç'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpen == true) {
+            await Geolocator.openLocationSettings();
+            // Wait a moment for user to toggle settings and come back
+            await Future.delayed(const Duration(seconds: 2));
+            // Re-check
+            serviceEnabled = await Geolocator.isLocationServiceEnabled();
+            if (!serviceEnabled) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Text('⚠️ Konum hâlâ kapalı — adresi elle girin'),
+                    backgroundColor: AppColors.warning,
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              }
+              return;
+            }
+          } else {
+            return;
+          }
+        } else {
+          return;
+        }
+      }
+
+      // Check and request permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('⚠️ Konum izni verilmedi — adresi elle girin'),
+                backgroundColor: AppColors.warning,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          final shouldOpen = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Konum İzni Gerekli'),
+              content: const Text(
+                'Konum izni kalıcı olarak reddedilmiş. Uygulama ayarlarından izni açmanız gerekiyor.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Geç'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Ayarları Aç'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpen == true) {
+            await Geolocator.openAppSettings();
+          }
+        }
+        return;
+      }
+
+      // Show loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: const [
+                SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                ),
+                SizedBox(width: 12),
+                Text('Konum alınıyor…'),
+              ],
+            ),
+            duration: const Duration(seconds: 15),
+            backgroundColor: AppColors.info,
+          ),
+        );
+      }
+
+      // Get current position
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+
+      _latitude = position.latitude;
+      _longitude = position.longitude;
+
+      debugPrint('[Location] GPS OK: ${position.latitude}, ${position.longitude}');
+
+      // Reverse geocode
+      try {
+        final placemarks = await placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+
+        if (placemarks.isNotEmpty && mounted) {
+          final place = placemarks.first;
+
+          // Debug: print all available fields
+          debugPrint('[Location] Placemark: '
+              'street=${place.street}, '
+              'subLocality=${place.subLocality}, '
+              'locality=${place.locality}, '
+              'subAdminArea=${place.subAdministrativeArea}, '
+              'adminArea=${place.administrativeArea}, '
+              'postalCode=${place.postalCode}, '
+              'thoroughfare=${place.thoroughfare}, '
+              'subThoroughfare=${place.subThoroughfare}');
+
+          setState(() {
+            // Sokak/Cadde: street genelde daha doğru (Türkiye'de),
+            // thoroughfare bazen farklı sonuç verebilir
+            if (_streetController.text.isEmpty) {
+              final street = place.street ?? place.thoroughfare;
+              if (street != null && street.isNotEmpty) {
+                _streetController.text = street;
+              }
+            }
+            // İlçe: subAdministrativeArea = ilçe (Türkiye'de doğru alan)
+            // subLocality = mahalle (bu ilçe DEĞİL)
+            if (_districtController.text.isEmpty) {
+              final district = place.subAdministrativeArea;
+              if (district != null && district.isNotEmpty) {
+                _districtController.text = district;
+              }
+            }
+            // İl: administrativeArea = il (Türkiye'de doğru alan)
+            if (_cityController.text.isEmpty) {
+              final city = place.administrativeArea;
+              if (city != null && city.isNotEmpty) {
+                _cityController.text = city;
+              }
+            }
+            // Posta kodu
+            if (_postalCodeController.text.isEmpty) {
+              if (place.postalCode != null && place.postalCode!.isNotEmpty) {
+                _postalCodeController.text = place.postalCode!;
+              }
+            }
+          });
+
+          // Dismiss loading snackbar and show success
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('📍 Konum alındı — adres alanları dolduruldu'),
+                backgroundColor: AppColors.success,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        } else {
+          // No placemarks found
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('📍 Koordinatlar alındı (${position.latitude.toStringAsFixed(4)}, '
+                    '${position.longitude.toStringAsFixed(4)}) — adres çevrilemedi'),
+                backgroundColor: AppColors.warning,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('[Location] Reverse geocoding failed: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('📍 GPS alındı ama adres çevrilemedi: $e'),
+              backgroundColor: AppColors.warning,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[Location] GPS error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Konum alınamadı: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
 
   void _submit() {
     if (!_formKey.currentState!.validate()) {
@@ -228,6 +479,8 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
       _districtController.text.trim(),
       _cityController.text.trim(),
       _postalCodeController.text.trim(),
+      _latitude,
+      _longitude,
     );
 
     Navigator.pop(context);

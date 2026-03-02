@@ -47,6 +47,10 @@ dependencies:
   
   # Local storage
   shared_preferences: ^2.3.3
+  
+  # Location
+  geolocator: ^13.0.2
+  geocoding: ^3.0.0
 
 dev_dependencies:
   flutter_test:

@@ -64,6 +64,8 @@ class _DashboardPageState extends State<DashboardPage> {
     String? district,
     String? city,
     String? postalCode,
+    double? latitude,
+    double? longitude,
   ) async {
     final finalName = name ??
         'Gateway ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}';
@@ -78,6 +80,8 @@ class _DashboardPageState extends State<DashboardPage> {
       district: district,
       city: city,
       postalCode: postalCode,
+      latitude: latitude,
+      longitude: longitude,
     );
 
     if (mounted) {
