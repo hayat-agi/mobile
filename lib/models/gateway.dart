@@ -47,6 +47,66 @@ class Gateway {
   bool get isLowBattery => batteryLevel < 20;
   bool get hasGoodSignal => signalStrength != null && signalStrength! > -70;
 
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'macAddress': macAddress,
+      'status': status.name,
+      'batteryLevel': batteryLevel,
+      'signalStrength': signalStrength,
+      'lastSeen': lastSeen?.toIso8601String(),
+      'connectedAt': connectedAt?.toIso8601String(),
+      'messagesSent': messagesSent,
+      'messagesReceived': messagesReceived,
+      'buildingType': buildingType?.name,
+      'street': street,
+      'buildingNumber': buildingNumber,
+      'doorNumber': doorNumber,
+      'district': district,
+      'city': city,
+      'postalCode': postalCode,
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+  }
+
+  factory Gateway.fromJson(Map<String, dynamic> json) {
+    return Gateway(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      macAddress: json['macAddress'] as String?,
+      status: GatewayStatus.values.firstWhere(
+        (e) => e.name == json['status'],
+        orElse: () => GatewayStatus.disconnected,
+      ),
+      batteryLevel: (json['batteryLevel'] as num?)?.toInt() ?? 100,
+      signalStrength: (json['signalStrength'] as num?)?.toInt(),
+      lastSeen: json['lastSeen'] != null
+          ? DateTime.tryParse(json['lastSeen'] as String)
+          : null,
+      connectedAt: json['connectedAt'] != null
+          ? DateTime.tryParse(json['connectedAt'] as String)
+          : null,
+      messagesSent: (json['messagesSent'] as num?)?.toInt() ?? 0,
+      messagesReceived: (json['messagesReceived'] as num?)?.toInt() ?? 0,
+      buildingType: json['buildingType'] != null
+          ? BuildingType.values.firstWhere(
+              (e) => e.name == json['buildingType'],
+              orElse: () => BuildingType.other,
+            )
+          : null,
+      street: json['street'] as String?,
+      buildingNumber: json['buildingNumber'] as String?,
+      doorNumber: json['doorNumber'] as String?,
+      district: json['district'] as String?,
+      city: json['city'] as String?,
+      postalCode: json['postalCode'] as String?,
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
+    );
+  }
+
   Gateway copyWith({
     String? id,
     String? name,

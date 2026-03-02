@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../../models/gateway.dart';
 import '../../services/gateway_service.dart';
 import '../../core/routing/app_router.dart';
@@ -13,6 +14,9 @@ import '../../core/widgets/danger_button.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_typography.dart';
+import '../ble/ble_service.dart';
+import '../ble/BLEConstants.dart';
+import '../ble/BLEConnectionManager.dart';
 
 class GatewayDetailsPage extends StatefulWidget {
   final String gatewayId;
@@ -28,6 +32,8 @@ class GatewayDetailsPage extends StatefulWidget {
 
 class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
   final GatewayService _gatewayService = GatewayService();
+  final BleService _bleService = BleService();
+  bool _isConnecting = false;
 
   StatusType _getStatusType(GatewayStatus status) {
     switch (status) {
@@ -79,27 +85,141 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
   }
 
   Future<void> _connectGateway(Gateway gateway) async {
-    await _gatewayService.connectToGateway(gateway.id);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Gateway\'e bağlanılıyor...'),
-          backgroundColor: AppColors.info,
-        ),
-      );
+    if (_isConnecting) return;
+
+    setState(() {
+      _isConnecting = true;
+    });
+
+    try {
+      final controller = _bleService.bleConnection;
+
+      // ── Fast path: BLE link is already up (singleton survived navigation) ──
+      if (_bleService.isConnected.value && controller.isAuthenticated.value) {
+        _gatewayService.updateGatewayStatus(gateway.id, GatewayStatus.connected);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Gateway zaten bağlı'),
+              backgroundColor: AppColors.success,
+            ),
+          );
+        }
+        return;
+      }
+
+      // ── Scan for the device ──
+      await _bleService.scanDevices();
+
+      final results = _bleService.results.value;
+
+      // Try matching by exact remoteId first, then fall back to device name.
+      // The gateway ID might not match remoteId if the user entered it
+      // manually (e.g. when auto-fill didn't work on the first add).
+      ScanResult? deviceResult;
+      for (final r in results) {
+        if (r.device.remoteId.toString() == gateway.id) {
+          deviceResult = r;
+          break;
+        }
+      }
+      if (deviceResult == null) {
+        // Fallback: match by device name (case-insensitive)
+        final gatewayNameUpper = gateway.name.toUpperCase();
+        for (final r in results) {
+          final name = r.device.platformName.isNotEmpty
+              ? r.device.platformName
+              : r.advertisementData.advName;
+          if (name.toUpperCase() == gatewayNameUpper ||
+              name.toUpperCase() == BleConstants.deviceName) {
+            deviceResult = r;
+            break;
+          }
+        }
+      }
+      if (deviceResult == null && results.isNotEmpty) {
+        // Last resort: if exactly one ESP32 device was found, use it
+        deviceResult = results.first;
+      }
+      if (deviceResult == null) {
+        throw Exception(
+          'Cihaz bulunamadı. ESP32 cihazınızın açık ve yayın yaptığından emin olun.',
+        );
+      }
+
+      // ── Connect (no provisioning needed) ──
+      await _bleService.connect(deviceResult);
+
+      if (!_bleService.isConnected.value) {
+        throw Exception(
+          'Bağlantı başarısız: ${_bleService.bleConnection.status.value}',
+        );
+      }
+
+      _gatewayService.updateGatewayStatus(gateway.id, GatewayStatus.connected);
+
+      // If the gateway was added with a manually-entered ID, update it
+      // to the real BLE remoteId so future reconnects work reliably.
+      final realId = deviceResult.device.remoteId.toString();
+      if (gateway.id != realId) {
+        _gatewayService.updateGatewayBleId(gateway.id, realId);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Gateway\'e başarıyla bağlandı'),
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Bağlantı hatası: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isConnecting = false;
+        });
+      }
     }
   }
 
   Future<void> _disconnectGateway(Gateway gateway) async {
+    try {
+      await _bleService.disconnect();
     await _gatewayService.disconnectFromGateway(gateway.id);
+      
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Bağlantı kesildi'),
+          const SnackBar(
+            content: Text('Bağlantı kesildi'),
           backgroundColor: AppColors.warning,
         ),
       );
     }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Bağlantı kesme hatası: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   void _showDeleteDialog(Gateway gateway) {
@@ -266,13 +386,14 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                         SecondaryButton(
                           label: 'Bağlantıyı Kes',
                           icon: Icons.link_off,
-                          onPressed: () => _disconnectGateway(updatedGateway),
+                          onPressed: _isConnecting ? null : () => _disconnectGateway(updatedGateway),
                         )
                       else
                         PrimaryButton(
                           label: 'Bağlan',
                           icon: Icons.link,
                           onPressed: () => _connectGateway(updatedGateway),
+                          isLoading: _isConnecting,
                         ),
                       const SizedBox(height: AppSpacing.sm),
                       // Remove Button

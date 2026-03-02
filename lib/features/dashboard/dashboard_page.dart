@@ -11,6 +11,8 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_typography.dart';
 import '../../models/gateway.dart';
 import '../../services/gateway_service.dart';
+// import '../../services/device_password_service.dart'; // Removed: obsolete
+import '../ble/ble_service.dart';
 import 'add_gateway_bottom_sheet.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -22,6 +24,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   final GatewayService _gatewayService = GatewayService();
+  final BleService _bleService = BleService();
   final TextEditingController _searchController = TextEditingController();
   String _filterStatus = 'all'; // all, connected, disconnected, lowBattery
   final String _sortBy = 'name'; // name, battery, signal, lastSeen
@@ -29,7 +32,20 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
-    _gatewayService.initialize();
+    // Deferred to post-frame so that ValueListenableBuilder is fully mounted
+    // before any notification fires. This prevents the "setState() called
+    // during build" crash when initialize() mutates the gateways notifier.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initAndAutoReconnect();
+    });
+  }
+
+  /// Load persisted gateways, then drain any pending messages from a
+  /// previous session (e.g. earthquake messages saved before app closed).
+  Future<void> _initAndAutoReconnect() async {
+    await _gatewayService.initialize();
+    if (!mounted) return;
+    await _bleService.loadAndDrainPendingQueue();
   }
 
   @override
@@ -68,10 +84,12 @@ class _DashboardPageState extends State<DashboardPage> {
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Gateway eklendi'),
+            content: const Text('Gateway eklendi — bağlanılıyor…'),
             backgroundColor: AppColors.success,
           ),
         );
+        // Auto-connect right after adding — no extra tap needed
+        _gatewayService.connectToGateway(gatewayId);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

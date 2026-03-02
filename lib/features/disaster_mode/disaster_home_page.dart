@@ -1,13 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../ble/ble_service.dart';
+import 'package:get/get.dart';
+import 'controllers/disaster_controller.dart';
+import 'models/disaster_enums.dart';
+import 'widgets/status_action_button.dart';
+import 'widgets/smart_chip_selector.dart';
+import 'widgets/triage_score_display.dart';
 import '../../core/routing/app_router.dart';
-import '../../core/widgets/modern_card.dart';
-import '../../core/widgets/status_pill.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_typography.dart';
+import '../ble/ble_service.dart';
 
+/// Disaster Mode — CRITICAL screen.
+///
+/// True-black UI with:
+///   • Three long-press status buttons (Yaralıyım / Mahsurum / Güvendeyim)
+///   • Context-sensitive smart chips (injury, situation, needs, people)
+///   • Real-time triage score display
+///   • Bitmask payload sent via BLE
+///   • 15-minute debounce between sends
 class DisasterHomePage extends StatefulWidget {
   const DisasterHomePage({super.key});
 
@@ -16,13 +27,17 @@ class DisasterHomePage extends StatefulWidget {
 }
 
 class _DisasterHomePageState extends State<DisasterHomePage> {
-  final TextEditingController _messageController = TextEditingController();
-  final BleService _bleService = BleService();
-  bool _isSending = false;
+  late final DisasterController _ctrl;
+  final _manualTextController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _ctrl = Get.put(DisasterController());
+
+    // Activate disaster mode: gateway is released immediately after each send
+    BleService().bleConnection.disasterMode = true;
+
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
@@ -32,158 +47,262 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
         systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
-    
-    _bleService.isConnected.addListener(_updateConnectionStatus);
-    _bleService.status.addListener(_updateConnectionStatus);
-  }
-  
-  void _updateConnectionStatus() {
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   @override
   void dispose() {
-    _messageController.dispose();
-    _bleService.isConnected.removeListener(_updateConnectionStatus);
-    _bleService.status.removeListener(_updateConnectionStatus);
+    // Deactivate disaster mode: return to normal 3s idle timer
+    BleService().bleConnection.disasterMode = false;
+
+    _manualTextController.dispose();
+    Get.delete<DisasterController>();
     super.dispose();
   }
 
-  Future<void> _sendSosMessage({String? quickMessage}) async {
-    final message = quickMessage ?? _messageController.text.trim();
-    
-    if (message.isEmpty) {
-      HapticFeedback.lightImpact();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Lütfen bir mesaj yazın'),
-          backgroundColor: AppColors.warning,
-        ),
-      );
-      return;
-    }
+  // ─── Send handler ──────────────────────────────────────────────────
 
+  Future<void> _onSend() async {
     HapticFeedback.mediumImpact();
-    
-    setState(() {
-      _isSending = true;
-    });
 
-    await _bleService.sendSosMessage(message);
+    final success = await _ctrl.sendStatus();
 
-    if (mounted) {
-      setState(() {
-        _isSending = false;
-        _messageController.clear();
-      });
+    if (!mounted) return;
 
-      HapticFeedback.heavyImpact();
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Mesaj gönderildi'),
-          backgroundColor: AppColors.success,
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Durum bilgisi gönderildi'
+              : _ctrl.isConnected
+                  ? 'Gönderim başarısız — tekrar deneyin'
+                  : 'Gateway bağlantısı yok',
         ),
-      );
-    }
-  }
-
-  void _sendQuickStatus(String message) {
-    _sendSosMessage(quickMessage: message);
-  }
-
-  void _navigateToMessages() {
-    Navigator.pushNamed(context, AppRouter.messages);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screenHeight = MediaQuery.of(context).size.height;
-    final screenWidth = MediaQuery.of(context).size.width;
-    
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          'Afet Modu',
-          style: TextStyle(color: Colors.white),
-        ),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(AppSpacing.screenPadding),
-          child: Column(
-            children: [
-              // Emergency Mode Banner
-              _buildEmergencyBanner(),
-              SizedBox(height: screenHeight * 0.04),
-              
-              // Connection Status
-              _buildConnectionStatus(),
-              SizedBox(height: screenHeight * 0.04),
-              
-              // SOS Button
-              _buildSosButton(screenWidth),
-              SizedBox(height: screenHeight * 0.04),
-              
-              // Quick Status Buttons
-              _buildQuickStatusButtons(),
-              SizedBox(height: AppSpacing.lg),
-              
-              // Custom Message Input
-              _buildCustomMessageInput(),
-              SizedBox(height: AppSpacing.lg),
-              
-              // Messages Button
-              _buildMessagesButton(),
-            ],
-          ),
-        ),
+        backgroundColor: success ? AppColors.success : AppColors.danger,
+        duration: const Duration(seconds: 3),
       ),
     );
   }
 
+  Future<void> _onManualSend() async {
+    final text = _manualTextController.text.trim();
+    if (text.isEmpty) return;
+
+    HapticFeedback.lightImpact();
+
+    final success = await _ctrl.sendManualMessage(text);
+
+    if (!mounted) return;
+
+    if (success) {
+      _manualTextController.clear();
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? (_ctrl.isConnected ? 'Mesaj gönderildi' : 'Mesaj kuyruğa eklendi')
+              : 'Mesaj gönderilemedi',
+        ),
+        backgroundColor: success ? AppColors.success : AppColors.danger,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // ─── Build ─────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: _buildAppBar(),
+      body: SafeArea(
+        child: Obx(() {
+          final status = _ctrl.selectedStatus.value;
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.md,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Emergency banner
+                _buildEmergencyBanner(),
+                const SizedBox(height: 20),
+
+                // Status buttons
+                _buildStatusButtons(),
+                const SizedBox(height: 24),
+
+                // Smart chip sections (context-sensitive)
+                if (status != null) ...[
+                  // Injury chips — only for injured / trapped
+                  if (status != DisasterStatus.safe) ...[
+                    Obx(() => SmartChipSelector<InjuryChip>(
+                          title: 'YARALANMA DURUMU',
+                          chips: InjuryChip.values,
+                          selected: _ctrl.selectedInjuries.toSet(),
+                          labelOf: (c) => c.label,
+                          iconOf: (c) => c.icon,
+                          accentColor: const Color(0xFFEF4444),
+                          onToggle: _ctrl.toggleInjury,
+                        )),
+                    const SizedBox(height: 16),
+
+                    // Situation chips
+                    Obx(() => SmartChipSelector<SituationChip>(
+                          title: 'DURUM',
+                          chips: SituationChip.values,
+                          selected: _ctrl.selectedSituations.toSet(),
+                          labelOf: (c) => c.label,
+                          iconOf: (c) => c.icon,
+                          accentColor: const Color(0xFFF59E0B),
+                          onToggle: _ctrl.toggleSituation,
+                        )),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // Needs chips — all statuses
+                  Obx(() => SmartChipSelector<NeedChip>(
+                        title: 'İHTİYAÇLAR',
+                        chips: NeedChip.values,
+                        selected: _ctrl.selectedNeeds.toSet(),
+                        labelOf: (c) => c.label,
+                        iconOf: (c) => c.icon,
+                        accentColor: const Color(0xFF3B82F6),
+                        onToggle: _ctrl.toggleNeed,
+                      )),
+                  const SizedBox(height: 16),
+
+                  // People chips — all statuses
+                  Obx(() => SmartChipSelector<PeopleChip>(
+                        title: 'KİŞİLER',
+                        chips: PeopleChip.values,
+                        selected: _ctrl.selectedPeople.toSet(),
+                        labelOf: (c) => c.label,
+                        iconOf: (c) => c.icon,
+                        accentColor: const Color(0xFF8B5CF6),
+                        onToggle: _ctrl.togglePeople,
+                      )),
+                  const SizedBox(height: 16),
+
+                  // People count
+                  _buildPeopleCount(),
+                  const SizedBox(height: 24),
+
+                  // Triage score
+                  Obx(() => TriageScoreDisplay(
+                        score: _ctrl.triageScore.value,
+                        category: _ctrl.triageCategory.value,
+                      )),
+                  const SizedBox(height: 24),
+
+                  // Send button
+                  _buildSendButton(),
+                  const SizedBox(height: 16),
+
+                  // Manual text input
+                  _buildManualTextInput(),
+                  const SizedBox(height: 16),
+
+                  // Messages link
+                  _buildMessagesButton(),
+                  const SizedBox(height: 24),
+                ],
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  // ─── AppBar ────────────────────────────────────────────────────────
+
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back, color: Colors.white),
+        onPressed: () => Navigator.pop(context),
+      ),
+      title: const Text('Afet Modu', style: TextStyle(color: Colors.white)),
+      actions: [
+        // Live connection indicator
+        Obx(() {
+          final connected = _ctrl.isConnected;
+          return Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: connected ? AppColors.success : AppColors.danger,
+                    boxShadow: [
+                      BoxShadow(
+                        color: (connected ? AppColors.success : AppColors.danger)
+                            .withValues(alpha: 0.5),
+                        blurRadius: 6,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  connected ? 'Bağlı' : 'Bağlantı Yok',
+                  style: TextStyle(
+                    color: connected ? AppColors.success : Colors.white54,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  // ─── Emergency banner ──────────────────────────────────────────────
+
   Widget _buildEmergencyBanner() {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.md),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.danger.withOpacity(0.2),
+        color: AppColors.danger.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.danger,
-          width: 2,
-        ),
+        border: Border.all(color: AppColors.danger, width: 1.5),
       ),
       child: Row(
         children: [
-          Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 32),
-          const SizedBox(width: AppSpacing.md),
+          const Icon(Icons.warning_amber_rounded,
+              color: AppColors.danger, size: 28),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'Acil Durum Modu',
-                  style: AppTypography.titleLarge(context).copyWith(
+                  style: TextStyle(
                     color: AppColors.danger,
                     fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
-                const SizedBox(height: AppSpacing.xs),
+                const SizedBox(height: 2),
                 Text(
-                  'Mesajlar gateway üzerinden gönderilecek',
-                  style: AppTypography.bodySmall(context).copyWith(
-                    color: Colors.white70,
-                  ),
+                  'Durumunuzu seçin, detayları işaretleyin, gönderin',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               ],
             ),
@@ -193,263 +312,291 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     );
   }
 
-  Widget _buildConnectionStatus() {
-    return ValueListenableBuilder<String>(
-      valueListenable: _bleService.status,
-      builder: (context, status, _) {
-        final isConnected = _bleService.isConnected.value;
-        final isScanning = _bleService.isScanning.value;
-        
-        return ModernCard(
-          color: Colors.grey.shade900,
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  StatusPill(
-                    label: isConnected ? 'Bağlı' : 'Bağlı Değil',
-                    type: isConnected ? StatusType.success : StatusType.warning,
-                    icon: isConnected ? Icons.check_circle : Icons.cancel,
-                  ),
-                  const Spacer(),
-                  if (isScanning)
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                      ),
-                    ),
-                ],
+  // ─── Status buttons ────────────────────────────────────────────────
+
+  Widget _buildStatusButtons() {
+    return Obx(() {
+      final current = _ctrl.selectedStatus.value;
+
+      return Row(
+        children: DisasterStatus.values.map((status) {
+          final isSelected = current == status;
+          final isOtherSelected = current != null && !isSelected;
+
+          return Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: status == DisasterStatus.injured ? 0 : 6,
+                right: status == DisasterStatus.safe ? 0 : 6,
               ),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                isConnected
-                    ? "Gateway'e bağlısın"
-                    : "Gateway'e bağlı değilsin, mesaj sıraya alındı",
-                style: AppTypography.bodyMedium(context).copyWith(
-                  color: isConnected ? AppColors.success : Colors.white70,
-                ),
-                textAlign: TextAlign.center,
+              child: StatusActionButton(
+                label: status.label,
+                subtitle: status.subtitle,
+                icon: status.icon,
+                color: status.color,
+                isSelected: isSelected,
+                isDisabled: isOtherSelected,
+                onConfirmed: () => _ctrl.selectStatus(status),
+                onDeselected: () => _ctrl.clearStatus(),
               ),
-              if (!isConnected && !isScanning) ...[
-                const SizedBox(height: AppSpacing.md),
-                ElevatedButton.icon(
-                  onPressed: _bleService.scanDevices,
-                  icon: const Icon(Icons.search),
-                  label: const Text('Cihaz Ara'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.info,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
-              if (isScanning) ...[
-                const SizedBox(height: AppSpacing.md),
-                Text(
-                  'Cihazlar aranıyor...',
-                  style: AppTypography.bodySmall(context).copyWith(
-                    color: AppColors.info,
-                  ),
-                ),
-              ],
-              if (!isConnected && _bleService.results.value.isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.md),
-                ..._bleService.results.value.take(3).map((result) {
-                  final name = result.device.platformName.isNotEmpty
-                      ? result.device.platformName
-                      : result.advertisementData.advName;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: () => _bleService.connect(result),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: const BorderSide(color: Colors.white54),
-                        ),
-                        child: Text(
-                          name.isEmpty ? 'Bilinmeyen Cihaz' : name,
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ],
-            ],
+            ),
+          );
+        }).toList(),
+      );
+    });
+  }
+
+  // ─── People count ──────────────────────────────────────────────────
+
+  Widget _buildPeopleCount() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          // Adults
+          Expanded(
+            child: Obx(() => _CounterTile(
+                  label: 'Yetişkin',
+                  value: _ctrl.adultCount.value,
+                  onIncrement: _ctrl.incrementAdults,
+                  onDecrement: _ctrl.decrementAdults,
+                )),
           ),
-        );
-      },
+          Container(
+            width: 1,
+            height: 40,
+            color: Colors.grey.shade700,
+          ),
+          // Children
+          Expanded(
+            child: Obx(() => _CounterTile(
+                  label: 'Çocuk',
+                  value: _ctrl.childCount.value,
+                  onIncrement: _ctrl.incrementChildren,
+                  onDecrement: _ctrl.decrementChildren,
+                )),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildSosButton(double screenWidth) {
-    final buttonSize = (screenWidth * 0.5).clamp(200.0, 280.0);
-    
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      width: buttonSize,
-      height: buttonSize,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: _isSending ? null : () => _sendSosMessage(),
-          borderRadius: BorderRadius.circular(buttonSize / 2),
-          child: Container(
-            decoration: BoxDecoration(
-              color: _isSending ? AppColors.dangerDark : AppColors.danger,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.danger.withOpacity(0.6),
-                  blurRadius: _isSending ? 40 : 30,
-                  spreadRadius: _isSending ? 8 : 0,
+  // ─── Send button ───────────────────────────────────────────────────
+
+  Widget _buildSendButton() {
+    return Obx(() {
+      final canSend = _ctrl.canSend.value;
+      final isSending = _ctrl.isSending.value;
+      final hasStatus = _ctrl.selectedStatus.value != null;
+      final connected = _ctrl.isConnected;
+      final enabled = canSend && hasStatus && connected && !isSending;
+
+      final color = enabled ? _ctrl.triageCategory.value.color : Colors.grey.shade700;
+
+      return Column(
+        children: [
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: enabled ? _onSend : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: Colors.grey.shade800,
+                disabledForegroundColor: Colors.grey.shade500,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
                 ),
-              ],
-            ),
-            child: Center(
-              child: _isSending
+                elevation: enabled ? 4 : 0,
+              ),
+              child: isSending
                   ? const SizedBox(
-                      width: 50,
-                      height: 50,
+                      width: 24,
+                      height: 24,
                       child: CircularProgressIndicator(
-                        strokeWidth: 5,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        strokeWidth: 3,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     )
-                  : const Text(
-                      'SOS\nGÖNDER',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 42,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                        letterSpacing: 2,
-                        height: 1.2,
-                      ),
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.send, size: 22),
+                        const SizedBox(width: 10),
+                        Text(
+                          canSend
+                              ? 'DURUM BİLDİR'
+                              : 'BEKLEME (${_ctrl.debounceFormatted})',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                      ],
                     ),
             ),
+          ),
+
+          // Status hints
+          if (!connected)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Gateway bağlantısı gerekli',
+                style: TextStyle(color: AppColors.danger, fontSize: 12),
+              ),
+            ),
+          if (!canSend)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Yeni durum bildirimi için ${_ctrl.debounceFormatted} bekleyin',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ),
+        ],
+      );
+    });
+  }
+  // ─── Manual text input ──────────────────────────────────────────────
+
+  Widget _buildManualTextInput() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade700, width: 0.5),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _manualTextController,
+              enabled: true,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Mesaj yaz...',
+                hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 14),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _onManualSend(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _onManualSend,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: AppColors.success.withValues(alpha: 0.2),
+              ),
+              child: const Icon(
+                Icons.send_rounded,
+                size: 20,
+                color: AppColors.success,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Messages button ───────────────────────────────────────────────
+
+  Widget _buildMessagesButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: () => Navigator.pushNamed(context, AppRouter.messages),
+        icon: const Icon(Icons.message, size: 20),
+        label: const Text('Mesajlar'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white54,
+          side: BorderSide(color: Colors.grey.shade700),
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _buildQuickStatusButtons() {
+// ─── Helper: counter tile ────────────────────────────────────────────
+
+class _CounterTile extends StatelessWidget {
+  final String label;
+  final int value;
+  final VoidCallback onIncrement;
+  final VoidCallback onDecrement;
+
+  const _CounterTile({
+    required this.label,
+    required this.value,
+    required this.onIncrement,
+    required this.onDecrement,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
       children: [
-        _buildQuickStatusButton(
-          icon: Icons.warning,
-          label: 'Ağır yaralıyım',
-          color: AppColors.danger,
-          onTap: () => _sendQuickStatus('Ağır yaralıyım'),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white54, fontSize: 12),
         ),
-        const SizedBox(height: AppSpacing.sm),
-        _buildQuickStatusButton(
-          icon: Icons.air,
-          label: 'Sıkıştım ama nefes alıyorum',
-          color: AppColors.warning,
-          onTap: () => _sendQuickStatus('Sıkıştım ama nefes alıyorum'),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        _buildQuickStatusButton(
-          icon: Icons.water_drop,
-          label: 'Güvendeyim ama yardıma ihtiyacım var\n(su, yiyecek vb.)',
-          color: AppColors.info,
-          onTap: () => _sendQuickStatus('Güvendeyim ama yardıma ihtiyacım var (su, yiyecek vb.)'),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _circleButton(Icons.remove, onDecrement),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                '$value',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            _circleButton(Icons.add, onIncrement),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildQuickStatusButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: _isSending ? null : onTap,
-        icon: Icon(icon, size: 24),
-        label: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
-          textAlign: TextAlign.center,
+  Widget _circleButton(IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.grey.shade600),
         ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: color.withOpacity(0.2),
-          foregroundColor: color,
-          padding: const EdgeInsets.symmetric(
-            vertical: AppSpacing.md,
-            horizontal: AppSpacing.md,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: color, width: 2),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCustomMessageInput() {
-    return TextField(
-      controller: _messageController,
-      enabled: !_isSending,
-      style: const TextStyle(fontSize: 16, color: Colors.white),
-      decoration: InputDecoration(
-        hintText: 'Örn: Nefes alamıyorum, bacağım sıkıştı',
-        hintStyle: TextStyle(
-          fontSize: 14,
-          color: Colors.grey.shade400,
-        ),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade700),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.grey.shade700),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Colors.white, width: 2),
-        ),
-        filled: true,
-        fillColor: Colors.grey.shade900,
-        contentPadding: const EdgeInsets.all(AppSpacing.md),
-      ),
-      maxLines: 3,
-      textInputAction: TextInputAction.send,
-      onSubmitted: (_) => _sendSosMessage(),
-    );
-  }
-
-  Widget _buildMessagesButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: _navigateToMessages,
-        icon: const Icon(Icons.message, size: 24),
-        label: const Text(
-          'Mesajlar',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.grey.shade800,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
+        child: Icon(icon, color: Colors.white70, size: 18),
       ),
     );
   }

@@ -1,8 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import '../../core/widgets/primary_button.dart';
+import '../../core/widgets/secondary_button.dart';
 import '../../core/widgets/section_header.dart';
 import '../../core/theme/app_spacing.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_typography.dart';
 import '../../models/gateway.dart';
+import '../ble/ble_service.dart';
+import '../ble/BLEConstants.dart';
+import '../ble/activation_dialog.dart';
+import '../../services/device_password_service.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 /// Bottom sheet for adding a new gateway
 class AddGatewayBottomSheet extends StatefulWidget {
@@ -38,10 +47,26 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _postalCodeController = TextEditingController();
   
+  final BleService _bleService = BleService();
   BuildingType? _selectedBuildingType;
+  bool _showBleScan = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bleService.results.addListener(_onBleResultsChanged);
+  }
+
+  void _onBleResultsChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
+    _bleService.results.removeListener(_onBleResultsChanged);
+
     _gatewayIdController.dispose();
     _nameController.dispose();
     _streetController.dispose();
@@ -52,6 +77,137 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
     _postalCodeController.dispose();
     super.dispose();
   }
+
+  Future<void> _startBleScan() async {
+    setState(() {
+      _showBleScan = true;
+    });
+    await _bleService.scanDevices();
+  }
+
+  Future<void> _selectBleDevice(ScanResult result) async {
+    final deviceName = result.device.platformName.isNotEmpty
+        ? result.device.platformName
+        : result.advertisementData.advName;
+    final deviceId = result.device.remoteId.toString();
+    
+    // Show connecting dialog
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: AppSpacing.md),
+            Text('Bağlanıyor...\n$deviceName'),
+          ],
+        ),
+      ),
+    );
+    
+    try {
+      // Connect to the device — this handles everything automatically:
+      // service discovery, notifications, etc.
+      await _bleService.connect(result);
+      
+      if (!mounted) return;
+      
+      // Check if connected
+      if (!_bleService.isConnected.value) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Bağlantı başarısız: ${_bleService.status.value}'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+      
+      // Close connecting dialog
+      Navigator.of(context).pop();
+
+      // Make sure we're still connected after all that
+      if (!_bleService.isConnected.value || !mounted) {
+        await _bleService.disconnect();
+        return;
+      }
+
+      // Wait for NEED_ACTIVATION via Completer — reliable, no polling
+      final activationNeeded = await _bleService.waitForActivationPrompt();
+
+      if (activationNeeded && mounted) {
+        final activated = await showActivationDialog(context);
+        if (!mounted) return;
+
+        if (!activated) {
+          await _bleService.disconnect();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Cihaz aktive edilmedi — bağlantı kesildi'),
+              backgroundColor: AppColors.warning,
+            ),
+          );
+          return;
+        }
+
+        // Device activated — connection stays alive, no reboot
+      }
+
+      // Bağlantı başarılı! Formu doldur ve cihaz bilgilerini kaydet
+      await _saveDeviceInfoAndFillForm(deviceId, deviceName);
+      
+      // Close scan view
+      setState(() {
+        _showBleScan = false;
+      });
+      
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$deviceName başarıyla bağlandı ve form dolduruldu'),
+          backgroundColor: AppColors.success,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      
+      // Close connecting dialog if still open
+      try {
+        Navigator.of(context).pop();
+      } catch (_) {}
+      
+      // Show error
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Bağlantı hatası: $e'),
+          backgroundColor: AppColors.danger,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+  
+  /// Fill in the form with the connected device's info
+  Future<void> _saveDeviceInfoAndFillForm(String deviceId, String deviceName) async {
+    // REQ-GW-05: Persist the device ID for automatic reconnection
+    await DevicePasswordService().saveLastConnectedDeviceId(deviceId);
+
+    // Fill in the Gateway ID field automatically
+    _gatewayIdController.text = deviceId;
+
+    // Use the device name if user hasn't typed a custom name
+    if (_nameController.text.isEmpty && deviceName.isNotEmpty) {
+      _nameController.text = deviceName;
+    }
+  }
+  
 
   void _submit() {
     if (!_formKey.currentState!.validate()) {
@@ -131,12 +287,213 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                       controller: scrollController,
                       padding: const EdgeInsets.all(AppSpacing.screenPadding),
                       children: [
+                      // BLE Scan Option
+                      SecondaryButton(
+                        label: _showBleScan ? 'BLE Taramayı Durdur' : 'BLE Cihaz Tara',
+                        icon: _showBleScan ? Icons.stop : Icons.bluetooth_searching,
+                        onPressed: _showBleScan ? () {
+                          setState(() {
+                            _showBleScan = false;
+                          });
+                        } : _startBleScan,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      
+                      // BLE Scan Results
+                      if (_showBleScan)
+                        Obx(() {
+                          final controller = _bleService.bleConnection;
+                          final results = controller.results.toList();
+                          final isScanning = controller.isScanning.value;
+                          
+                          // Debug: Print results count
+                          print('📋 UI Builder (Obx): results.length = ${results.length}');
+                          print('📋 UI Builder (Obx): isScanning = $isScanning');
+                          
+                          // Show scanning indicator at top if scanning, but still show results
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Scanning indicator
+                              if (isScanning)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(AppSpacing.sm),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.info.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            valueColor: AlwaysStoppedAnimation<Color>(AppColors.info),
+                                          ),
+                                        ),
+                                        const SizedBox(width: AppSpacing.sm),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'BLE cihazları aranıyor...',
+                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                              Obx(() {
+                                                final status = controller.status.value;
+                                                return Text(
+                                                  status,
+                                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                    color: AppColors.textSecondaryLight,
+                                                    fontSize: 11,
+                                                  ),
+                                                );
+                                              }),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              
+                              // Empty state (only show when not scanning and no results)
+                              if (results.isEmpty && !isScanning)
+                                Padding(
+                                  padding: const EdgeInsets.all(AppSpacing.md),
+                                  child: Column(
+                                    children: [
+                                      Icon(
+                                        Icons.bluetooth_disabled,
+                                        size: 48,
+                                        color: AppColors.textSecondaryLight,
+                                      ),
+                                      const SizedBox(height: AppSpacing.sm),
+                                      Text(
+                                        'Cihaz bulunamadı',
+                                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                          color: AppColors.textSecondaryLight,
+                                        ),
+                                      ),
+                                      const SizedBox(height: AppSpacing.xs),
+                                      Text(
+                                        'ESP32 cihazınızın açık ve yayın yaptığından emin olun',
+                                        textAlign: TextAlign.center,
+                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                          color: AppColors.textSecondaryLight,
+                                        ),
+                                      ),
+                                      const SizedBox(height: AppSpacing.sm),
+                                      Obx(() {
+                                        final status = controller.status.value;
+                                        return Container(
+                                          padding: const EdgeInsets.all(AppSpacing.sm),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.warning.withOpacity(0.1),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Column(
+                                            children: [
+                                              Text(
+                                                'Durum:',
+                                                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                              const SizedBox(height: AppSpacing.xs),
+                                              Text(
+                                                status,
+                                                textAlign: TextAlign.center,
+                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                  color: AppColors.textSecondaryLight,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }),
+                                    ],
+                                  ),
+                                ),
+                              
+                              // Show results if available (even during scan)
+                              if (results.isNotEmpty) ...[
+                                Text(
+                                  'Bulunan Cihazlar (${results.length})',
+                                  style: Theme.of(context).textTheme.titleSmall,
+                                ),
+                                const SizedBox(height: AppSpacing.sm),
+                                // Show all results
+                                // REQ-GW-03: Show friendly names, hide MAC address
+                                ...results.asMap().entries.map((entry) {
+                                  final result = entry.value;
+
+                                  // Get the device name — use advertised name if available
+                                  final platformName = result.device.platformName;
+                                  final advName = result.advertisementData.advName;
+                                  final rawName = platformName.isNotEmpty ? platformName : advName;
+
+                                  // Show a friendly name: use the advertised name,
+                                  // or fall back to "HayatAğ Gateway" + number
+                                  final displayName = rawName.isNotEmpty
+                                      ? rawName
+                                      : 'HayatAğ Gateway ${entry.key + 1}';
+
+                                  // Signal strength indicator
+                                  final rssi = result.rssi;
+                                  final signalIcon = rssi > -50
+                                      ? Icons.signal_cellular_alt        // Excellent
+                                      : rssi > -70
+                                          ? Icons.signal_cellular_alt_2_bar // Good
+                                          : Icons.signal_cellular_alt_1_bar; // Weak
+                                  final signalColor = rssi > -50
+                                      ? AppColors.success    // Green = excellent
+                                      : rssi > -70
+                                          ? AppColors.warning  // Yellow = good
+                                          : AppColors.danger;  // Red = weak
+
+                                  return Card(
+                                    key: ValueKey(result.device.remoteId.str),
+                                    margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+                                    color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+                                    child: ListTile(
+                                      // Signal strength icon on the left
+                                      leading: Icon(
+                                        signalIcon,
+                                        color: signalColor,
+                                      ),
+                                      // Friendly device name
+                                      title: Text(
+                                        displayName,
+                                        style: const TextStyle(fontWeight: FontWeight.bold),
+                                      ),
+                                      // Show signal strength in dBm instead of MAC
+                                      subtitle: Text('Sinyal: $rssi dBm'),
+                                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                                      onTap: () async {
+                                        await _selectBleDevice(result);
+                                      },
+                                    ),
+                                  );
+                                }),
+                              ],
+                            ],
+                          );
+                        }),
+                      if (_showBleScan) const SizedBox(height: AppSpacing.md),
+                      
                       // Gateway ID
                       TextFormField(
                         controller: _gatewayIdController,
                         decoration: const InputDecoration(
                           labelText: 'Gateway ID *',
-                          hintText: 'Gateway ID\'sini girin',
+                          hintText: 'Gateway ID\'sini girin veya BLE\'dan seçin',
                           prefixIcon: Icon(Icons.qr_code_scanner),
                         ),
                         textInputAction: TextInputAction.next,

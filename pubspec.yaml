@@ -39,8 +39,14 @@ dependencies:
   flutter_blue_plus: ^1.32.7
   permission_handler: ^11.3.1
   
+  # State management
+  get: ^4.6.6
+  
   # App info
   package_info_plus: ^8.0.2
+  
+  # Local storage
+  shared_preferences: ^2.3.3
 
 dev_dependencies:
   flutter_test:
