@@ -233,22 +233,20 @@ class DisasterController extends GetxController {
     if (!canSend.value) return false;
     if (isSending.value) return false;
 
-    // REQ-GW-05: Auto-connect if disconnected
-    if (!isConnected) {
-      final savedGateways = GatewayService().gateways.value;
-      if (savedGateways.isNotEmpty) {
-        isSending.value = true;
-        final reconnected = await _bleService.autoReconnect(savedGateways.first.id);
-        isSending.value = false;
-        if (!reconnected) return false;
-      } else {
-        return false;
-      }
-    }
-
     isSending.value = true;
 
     try {
+      // REQ-GW-05: Auto-connect if disconnected
+      if (!isConnected) {
+        final savedGateways = GatewayService().gateways.value;
+        if (savedGateways.isNotEmpty) {
+          final reconnected = await _bleService.autoReconnect(savedGateways.first.id);
+          if (!reconnected) return false;
+        } else {
+          return false;
+        }
+      }
+
       final payload = buildPayload();
       if (payload.isEmpty) return false;
 

@@ -54,6 +54,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   final BleService _bleService = BleService();
   BuildingType? _selectedBuildingType;
   bool _showBleScan = false;
+  bool _isSelectingDevice = false;
   double? _latitude;
   double? _longitude;
 
@@ -92,118 +93,143 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   }
 
   Future<void> _selectBleDevice(ScanResult result) async {
-    final deviceName = result.device.platformName.isNotEmpty
-        ? result.device.platformName
-        : result.advertisementData.advName;
-    final deviceId = result.device.remoteId.toString();
-    
-    // Show connecting dialog
-    if (!mounted) return;
-    
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: AppSpacing.md),
-            Text('Bağlanıyor...\n$deviceName'),
-          ],
-        ),
-      ),
-    );
-    
+    if (_isSelectingDevice) return;
+    _isSelectingDevice = true;
+
     try {
-      // Connect to the device — this handles everything automatically:
-      // service discovery, notifications, etc.
-      await _bleService.connect(result);
-      
+      final deviceName = result.device.platformName.isNotEmpty
+          ? result.device.platformName
+          : result.advertisementData.advName;
+      final deviceId = result.device.remoteId.toString();
+
+      // Show connecting dialog
       if (!mounted) return;
-      
-      // Check if connected
-      if (!_bleService.isConnected.value) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Bağlantı başarısız: ${_bleService.status.value}'),
-            backgroundColor: AppColors.danger,
-            duration: const Duration(seconds: 3),
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: AppSpacing.md),
+              Text('Bağlanıyor...\n$deviceName'),
+            ],
           ),
-        );
-        return;
-      }
-      
-      // Close connecting dialog
-      Navigator.of(context).pop();
+        ),
+      );
 
-      // Make sure we're still connected after all that
-      if (!_bleService.isConnected.value || !mounted) {
-        await _bleService.disconnect();
-        return;
-      }
+      try {
+        // Connect to the device — this handles everything automatically:
+        // service discovery, notifications, etc.
+        await _bleService.connect(result);
 
-      // Wait for NEED_ACTIVATION via Completer — reliable, no polling
-      final activationNeeded = await _bleService.waitForActivationPrompt();
-
-      if (activationNeeded && mounted) {
-        final activated = await showActivationDialog(context);
         if (!mounted) return;
 
-        if (!activated) {
-          await _bleService.disconnect();
+        // Check if connected
+        if (!_bleService.isConnected.value) {
+          Navigator.of(context).pop();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Cihaz aktive edilmedi — bağlantı kesildi'),
-              backgroundColor: AppColors.warning,
+              content: Text('❌ Bağlantı başarısız: ${_bleService.status.value}'),
+              backgroundColor: AppColors.danger,
+              duration: const Duration(seconds: 3),
             ),
           );
           return;
         }
 
-        // Device activated — connection stays alive, no reboot
+        // Close connecting dialog
+        Navigator.of(context).pop();
+
+        // Make sure we're still connected after all that
+        if (!_bleService.isConnected.value || !mounted) {
+          await _bleService.disconnect();
+          return;
+        }
+
+        // Check if device needs activation.
+        // Primary: wait for NEED_ACTIVATION notification from ESP32 (handles factory-reset case).
+        // Fallback: if the notification is missed (timing issue), check local activation record.
+        debugPrint('[ADD_GW] Calling waitForActivationPrompt...');
+        final activationNeeded = await _bleService.waitForActivationPrompt();
+        debugPrint('[ADD_GW] activationNeeded=$activationNeeded, mounted=$mounted');
+
+        final bool showActivation;
+        if (activationNeeded) {
+          // ESP32 explicitly signalled it needs activation
+          showActivation = true;
+        } else {
+          // Notification missed or device already active — use local record
+          final locallyActivated = await DevicePasswordService().isActivated(deviceId);
+          showActivation = !locallyActivated;
+          debugPrint('[ADD_GW] locallyActivated=$locallyActivated → showActivation=$showActivation');
+        }
+
+        if (showActivation && mounted) {
+          debugPrint('[ADD_GW] Showing activation dialog...');
+          final activated = await showActivationDialog(context);
+          debugPrint('[ADD_GW] Activation dialog result: activated=$activated');
+          if (!mounted) return;
+
+          if (!activated) {
+            await _bleService.disconnect();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Cihaz aktive edilmedi — bağlantı kesildi'),
+                backgroundColor: AppColors.warning,
+              ),
+            );
+            return;
+          }
+
+          // Device activated — mark locally so next add skips the dialog
+          await DevicePasswordService().markActivated(deviceId);
+        }
+
+        // Bağlantı başarılı! Formu doldur ve cihaz bilgilerini kaydet
+        await _saveDeviceInfoAndFillForm(deviceId, deviceName);
+
+        // Close scan view
+        setState(() {
+          _showBleScan = false;
+        });
+
+        // Show success message
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$deviceName başarıyla bağlandı'),
+            backgroundColor: AppColors.success,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+
+        // Close connecting dialog if still open
+        try {
+          Navigator.of(context).pop();
+        } catch (_) {}
+
+        // Show error
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Bağlantı hatası: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return; // Don't try GPS if connection failed
       }
 
-      // Bağlantı başarılı! Formu doldur ve cihaz bilgilerini kaydet
-      await _saveDeviceInfoAndFillForm(deviceId, deviceName);
-      
-      // Close scan view
-      setState(() {
-        _showBleScan = false;
-      });
-      
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$deviceName başarıyla bağlandı'),
-          backgroundColor: AppColors.success,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      
-      // Close connecting dialog if still open
-      try {
-        Navigator.of(context).pop();
-      } catch (_) {}
-      
-      // Show error
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('❌ Bağlantı hatası: $e'),
-          backgroundColor: AppColors.danger,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-      return; // Don't try GPS if connection failed
+      // GPS konumu al ve adres alanlarını doldur
+      // Bu kısım BLE try-catch'inin DIŞINDA — kendi hata yönetimi var
+      debugPrint('[Location] _fetchAndFillLocation() CALLED');
+      await _fetchAndFillLocation();
+    } finally {
+      _isSelectingDevice = false;
     }
-
-    // GPS konumu al ve adres alanlarını doldur
-    // Bu kısım BLE try-catch'inin DIŞINDA — kendi hata yönetimi var
-    debugPrint('[Location] _fetchAndFillLocation() CALLED');
-    await _fetchAndFillLocation();
   }
   
   /// Fill in the form with the connected device's info

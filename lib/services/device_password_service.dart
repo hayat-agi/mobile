@@ -89,5 +89,27 @@ class DevicePasswordService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_lastConnectedDeviceKey);
   }
+
+  // ── Activation state ─────────────────────────────────────────────
+
+  static const String _activatedPrefix = 'device_activated_';
+
+  /// Returns true if this device has been successfully activated via this app.
+  Future<bool> isActivated(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('$_activatedPrefix$deviceId') ?? false;
+  }
+
+  /// Mark this device as successfully activated.
+  Future<void> markActivated(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('$_activatedPrefix$deviceId', true);
+  }
+
+  /// Clear the activated flag (e.g. after a factory reset).
+  Future<void> clearActivated(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_activatedPrefix$deviceId');
+  }
 }
 

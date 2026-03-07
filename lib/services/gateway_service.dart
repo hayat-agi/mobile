@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/gateway.dart';
 import '../models/household_profile.dart';
@@ -18,12 +19,32 @@ class GatewayService {
   static const String _gatewaysStorageKey = 'persisted_gateways';
   bool _initialized = false;
 
+  /// Syncs gateway statuses when the BLE connection drops unexpectedly.
+  /// Without this, the dashboard would show "Bağlı" forever after a BLE drop.
+  void _onBleConnectionChanged() {
+    if (!_bleService.isConnected.value) {
+      final updated = gateways.value.map((g) {
+        return g.isConnected
+            ? g.copyWith(
+                status: GatewayStatus.disconnected,
+                clearConnectedAt: true,
+                lastSeen: DateTime.now(),
+              )
+            : g;
+      }).toList();
+      gateways.value = updated;
+    }
+  }
+
   /// Load persisted gateways from SharedPreferences.
   /// Safe to call multiple times (idempotent). Must be awaited so the list
   /// is ready before any code tries to read or update it.
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
+
+    // Keep gateway statuses in sync with real BLE connection state
+    _bleService.isConnected.addListener(_onBleConnectionChanged);
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -51,10 +72,21 @@ class GatewayService {
     }
   }
 
-  /// Helper to try connecting once when app starts
+  /// Helper to try connecting once when app starts.
+  /// Skips the attempt if BLE permissions have not been granted yet
+  /// (e.g. first launch) to avoid showing a spurious "Hata" status.
   Future<void> _autoConnectOnStartup(String id) async {
     // Wait a bit for the app to settle
     await Future.delayed(const Duration(seconds: 2));
+
+    // Don't attempt if BLE permissions haven't been granted yet
+    final scanGranted = await Permission.bluetoothScan.isGranted;
+    final connectGranted = await Permission.bluetoothConnect.isGranted;
+    if (!scanGranted || !connectGranted) {
+      debugPrint('GatewayService: skipping auto-reconnect — BLE permissions not granted');
+      return;
+    }
+
     if (!_bleService.isConnected.value) {
       debugPrint('GatewayService: Attempting REQ-GW-05 auto-reconnect to $id');
       await connectToGateway(id);
@@ -169,6 +201,20 @@ class GatewayService {
     }
   }
 
+  // Update the count of registered mobile devices on a gateway
+  void updateGatewayDeviceCount(String gatewayId, int count) {
+    final index = gateways.value.indexWhere((g) => g.id == gatewayId);
+    if (index != -1) {
+      final updated = gateways.value[index].copyWith(
+        connectedDeviceCount: count,
+      );
+      final newList = List<Gateway>.from(gateways.value);
+      newList[index] = updated;
+      gateways.value = newList;
+      _saveGateways();
+    }
+  }
+
   // Update gateway signal strength
   void updateGatewaySignal(String gatewayId, int signalStrength) {
     final index = gateways.value.indexWhere((g) => g.id == gatewayId);
@@ -209,6 +255,13 @@ class GatewayService {
         newList[index] = updated;
         gateways.value = newList;
       }
+
+      // Step 3: Query how many mobile devices are registered on this gateway.
+      // Only devices registered to THIS gateway count — not nearby devices on others.
+      final deviceCount = await _bleService.queryDeviceCount();
+      if (deviceCount != null) {
+        updateGatewayDeviceCount(gatewayId, deviceCount);
+      }
     } catch (e) {
       debugPrint('GatewayService: Connection failed — $e');
       updateGatewayStatus(gatewayId, GatewayStatus.error);
@@ -225,7 +278,7 @@ class GatewayService {
       if (index != -1) {
         final updated = gateways.value[index].copyWith(
           status: GatewayStatus.disconnected,
-          connectedAt: null,
+          clearConnectedAt: true,
           lastSeen: DateTime.now(),
         );
         final newList = List<Gateway>.from(gateways.value);

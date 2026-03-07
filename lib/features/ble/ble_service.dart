@@ -201,7 +201,11 @@ class BleService {
   }
 
   /// Waits for NEED_ACTIVATION after connect. Call right after connect().
-  Future<bool> waitForActivationPrompt({Duration timeout = const Duration(seconds: 2)}) async {
+  ///
+  /// Delegates to [BleConnection.waitForActivationPrompt] which checks the
+  /// RxBool source of truth directly — avoids the async sync delay between
+  /// the GetX observable and the mirrored ValueNotifier.
+  Future<bool> waitForActivationPrompt({Duration timeout = const Duration(seconds: 5)}) async {
     return _bleConnection.waitForActivationPrompt(timeout: timeout);
   }
 
@@ -211,6 +215,14 @@ class BleService {
   /// Returns true if the ESP32 confirmed with MSG_OK.
   Future<bool> sendHexPayload(Uint8List payload) async {
     return _bleConnection.sendHexPayload(payload);
+  }
+
+  // ── Device Count ────────────────────────────────────────────────
+
+  /// Query how many mobile devices are registered on the connected ESP32.
+  /// Returns null if not connected or the gateway doesn't support this command.
+  Future<int?> queryDeviceCount() async {
+    return _bleConnection.queryDeviceCount();
   }
 
   // ── Factory Reset ───────────────────────────────────────────────

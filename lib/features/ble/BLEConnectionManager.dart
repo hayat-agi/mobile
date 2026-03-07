@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -196,26 +197,31 @@ class BleConnection extends GetxController {
   /// This is used when the app starts or when sending a background message.
   Future<bool> connectById(String deviceId) async {
     if (isConnected.value && _device?.remoteId.str == deviceId) {
-      _resetAutoReleaseTimer(); // Stay connected if we're already there
+      await _resetAutoReleaseTimer(); // Stay connected if we're already there
       return true;
     }
 
     status.value = 'Otomatik bağlanılıyor…';
-    
+
     // 1. Quick targeted scan (only for 5 seconds)
     await FlutterBluePlus.stopScan();
-    
-    Completer<ScanResult?> foundC = Completer();
-    var sub = FlutterBluePlus.scanResults.listen((results) {
-      for (var r in results) {
-        if (r.device.remoteId.str == deviceId) {
-          if (!foundC.isCompleted) foundC.complete(r);
-        }
-      }
-    });
+
+    final Completer<ScanResult?> foundC = Completer();
+    StreamSubscription<List<ScanResult>>? sub;
 
     try {
+      // Start scan BEFORE attaching the listener so the stream's cached
+      // (stale) results from a previous scan are discarded first.
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+
+      sub = FlutterBluePlus.scanResults.listen((results) {
+        for (var r in results) {
+          if (r.device.remoteId.str == deviceId) {
+            if (!foundC.isCompleted) foundC.complete(r);
+          }
+        }
+      });
+
       final result = await foundC.future.timeout(const Duration(seconds: 6), onTimeout: () => null);
       await sub.cancel();
       await FlutterBluePlus.stopScan();
@@ -227,7 +233,8 @@ class BleConnection extends GetxController {
       status.value = 'Gateway bulunamadı';
       return false;
     } catch (e) {
-      await sub.cancel();
+      await sub?.cancel();
+      await FlutterBluePlus.stopScan().catchError((_) {});
       return false;
     }
   }
@@ -235,14 +242,31 @@ class BleConnection extends GetxController {
   /// Waits for NEED_ACTIVATION notification after connect.
   /// Returns true if device needs activation, false if timeout or already active.
   Future<bool> waitForActivationPrompt({
-    Duration timeout = const Duration(seconds: 2),
+    Duration timeout = const Duration(seconds: 5),
   }) async {
+    // Fast path: notification already received and flag set
+    if (needsActivation.value) {
+      debugPrint('[ACTIVATION] waitForActivationPrompt → fast path TRUE');
+      return true;
+    }
+
     final c = _activationPromptCompleter;
-    if (c == null) return false;
+    if (c == null) {
+      // Completer missing — notification may still be in flight, wait briefly
+      debugPrint('[ACTIVATION] waitForActivationPrompt → completer NULL, waiting 1500ms');
+      await Future.delayed(const Duration(milliseconds: 1500));
+      final result = needsActivation.value;
+      debugPrint('[ACTIVATION] waitForActivationPrompt → fallback result=$result');
+      return result;
+    }
     try {
-      return await c.future.timeout(timeout, onTimeout: () => false);
-    } catch (_) {
-      return false;
+      debugPrint('[ACTIVATION] waitForActivationPrompt → waiting on completer (${timeout.inSeconds}s timeout)');
+      final result = await c.future.timeout(timeout, onTimeout: () => needsActivation.value);
+      debugPrint('[ACTIVATION] waitForActivationPrompt → completer result=$result');
+      return result;
+    } catch (e) {
+      debugPrint('[ACTIVATION] waitForActivationPrompt → error: $e, needsActivation=${needsActivation.value}');
+      return needsActivation.value;
     } finally {
       _activationPromptCompleter = null;
     }
@@ -255,6 +279,14 @@ class BleConnection extends GetxController {
   Future<void> connect(ScanResult r) async {
     _connectInProgress = true;
     _autoReleaseTimer?.cancel();
+
+    // ── Clean activation state from any previous connection ──
+    needsActivation.value = false;
+    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      _activationPromptCompleter!.complete(false);
+    }
+    _activationPromptCompleter = null;
+    debugPrint('[ACTIVATION] connect() — activation state reset');
 
     try {
       // Step 1: Disconnect from any previous device first
@@ -407,7 +439,7 @@ class BleConnection extends GetxController {
     // Connected — send immediately
     messages.add('ME: $text');
     final response = await _writeAndWaitResponse(text);
-    _resetAutoReleaseTimer();
+    await _resetAutoReleaseTimer();
 
     if (response == null) {
       messages.add('[System] No response (timeout)');
@@ -610,7 +642,9 @@ class BleConnection extends GetxController {
     isConnected.value = false;
     isAuthenticated.value = false;
     needsActivation.value = false;
-    _activationPromptCompleter?.complete(false);
+    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      _activationPromptCompleter!.complete(false);
+    }
     _activationPromptCompleter = null;
     status.value = 'Disconnected';
   }
@@ -640,7 +674,7 @@ class BleConnection extends GetxController {
     final waitTimeout = timeout ?? BleConstants.responseTimeout;
 
     // Write the text as UTF-8 bytes
-    await _rx!.write(utf8.encode(text), withoutResponse: true);
+    await _rx!.write(utf8.encode(text), withoutResponse: false);
 
     try {
       // Wait for the ESP32's response
@@ -664,15 +698,20 @@ class BleConnection extends GetxController {
   /// Called automatically whenever the ESP32 sends us a notification.
   /// This is how we receive responses after writing.
   void _onNotification(List<int> data) {
-    final msg = utf8.decode(data, allowMalformed: true).trim();
+    final msg = utf8.decode(data, allowMalformed: true).replaceAll('\x00', '').trim();
     if (msg.isEmpty) return;
 
+    debugPrint('[NOTIFY] Received: "$msg" (${data.length} bytes, raw=$data)');
+
     // Unsolicited activation prompt from ESP32 — set flag and complete waiter
-    if (msg == BleConstants.respNeedActivation ||
-        msg.contains(BleConstants.respNeedActivation)) {
+    if (msg == BleConstants.respNeedActivation) {
+      debugPrint('[ACTIVATION] NEED_ACTIVATION received — setting flag & completing completer');
       needsActivation.value = true;
       if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
         _activationPromptCompleter!.complete(true);
+        debugPrint('[ACTIVATION] Completer completed with TRUE');
+      } else {
+        debugPrint('[ACTIVATION] Completer was ${_activationPromptCompleter == null ? "NULL" : "already completed"}');
       }
       messages.add('[System] Cihaz aktivasyon bekliyor');
       return;
@@ -701,7 +740,9 @@ class BleConnection extends GetxController {
     isConnected.value = false;
     isAuthenticated.value = false;
     needsActivation.value = false;
-    _activationPromptCompleter?.complete(false);
+    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      _activationPromptCompleter!.complete(false);
+    }
     _activationPromptCompleter = null;
     status.value = 'Disconnected (unexpected)';
   }
@@ -829,7 +870,7 @@ class BleConnection extends GetxController {
       }
 
       // Release the gateway so the next person can connect
-      _resetAutoReleaseTimer();
+      await _resetAutoReleaseTimer();
     } catch (e) {
       messages.add('[System] Queue send error: $e');
     } finally {
@@ -902,11 +943,15 @@ class BleConnection extends GetxController {
 
       if (_rx == null || _tx == null) throw 'Characteristics not found';
 
+      // Set up activation prompt completer (same as connect())
+      _activationPromptCompleter = Completer<bool>();
+
       _notifySub?.cancel();
       _notifySub = _tx!.onValueReceived.listen(_onNotification);
 
       await _tx!.setNotifyValue(true);
       await Future.delayed(BleConstants.notifySetupDelay);
+      await Future.delayed(const Duration(milliseconds: 300));
 
       if (!_device!.isConnected) throw 'Connection dropped during setup';
 
@@ -970,14 +1015,33 @@ class BleConnection extends GetxController {
   ///   logic that lets 10+ people take turns on one ESP32.
   /// - **Normal mode**: no auto-disconnect. The user stays connected until
   ///   they leave the screen or the connection drops naturally.
-  void _resetAutoReleaseTimer() {
+  Future<void> _resetAutoReleaseTimer() async {
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
 
     if (disasterMode && isConnected.value) {
-      print('[BLE] Disaster mode — releasing Gateway immediately');
-      disconnect();
+      await disconnect();
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  DEVICE COUNT — Query how many mobile devices are registered on the ESP32
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Sends GET_DEVICE_COUNT to the ESP32 and returns the parsed count.
+  /// Returns null if not connected or the response is unexpected.
+  Future<int?> queryDeviceCount() async {
+    if (_rx == null || !isConnected.value) return null;
+
+    final response = await _writeAndWaitResponse(BleConstants.cmdGetDeviceCount);
+    if (response == null) return null;
+
+    if (response.startsWith(BleConstants.respDeviceCountPrefix)) {
+      return int.tryParse(
+        response.substring(BleConstants.respDeviceCountPrefix.length),
+      );
+    }
+    return null;
   }
 
   /// Called when this controller is destroyed (app closing, etc.)

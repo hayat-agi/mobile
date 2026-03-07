@@ -56,6 +56,12 @@ class BleConstants {
   /// Tells the ESP32 to erase all settings and reboot
   static const String cmdFactoryReset = 'FACTORY_RESET';
 
+  /// Asks the ESP32 how many mobile devices are registered to it
+  static const String cmdGetDeviceCount = 'GET_DEVICE_COUNT';
+
+  /// Prefix for the device count response — full format: "DEVICE_COUNT_3"
+  static const String respDeviceCountPrefix = 'DEVICE_COUNT_';
+
   // ── Timing Settings ─────────────────────────────────────────────
 
   /// Max MTU (message size) — we don't negotiate this right now

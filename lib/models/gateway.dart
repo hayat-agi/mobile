@@ -9,6 +9,7 @@ class Gateway {
   final DateTime? connectedAt;
   final int messagesSent;
   final int messagesReceived;
+  final int? connectedDeviceCount; // number of mobile devices registered on this gateway
   
   // Address fields
   final BuildingType? buildingType;
@@ -32,6 +33,7 @@ class Gateway {
     this.connectedAt,
     this.messagesSent = 0,
     this.messagesReceived = 0,
+    this.connectedDeviceCount,
     this.buildingType,
     this.street,
     this.buildingNumber,
@@ -59,6 +61,7 @@ class Gateway {
       'connectedAt': connectedAt?.toIso8601String(),
       'messagesSent': messagesSent,
       'messagesReceived': messagesReceived,
+      'connectedDeviceCount': connectedDeviceCount,
       'buildingType': buildingType?.name,
       'street': street,
       'buildingNumber': buildingNumber,
@@ -90,6 +93,7 @@ class Gateway {
           : null,
       messagesSent: (json['messagesSent'] as num?)?.toInt() ?? 0,
       messagesReceived: (json['messagesReceived'] as num?)?.toInt() ?? 0,
+      connectedDeviceCount: (json['connectedDeviceCount'] as num?)?.toInt(),
       buildingType: json['buildingType'] != null
           ? BuildingType.values.firstWhere(
               (e) => e.name == json['buildingType'],
@@ -116,8 +120,10 @@ class Gateway {
     int? signalStrength,
     DateTime? lastSeen,
     DateTime? connectedAt,
+    bool clearConnectedAt = false,
     int? messagesSent,
     int? messagesReceived,
+    int? connectedDeviceCount,
     BuildingType? buildingType,
     String? street,
     String? buildingNumber,
@@ -136,9 +142,10 @@ class Gateway {
       batteryLevel: batteryLevel ?? this.batteryLevel,
       signalStrength: signalStrength ?? this.signalStrength,
       lastSeen: lastSeen ?? this.lastSeen,
-      connectedAt: connectedAt ?? this.connectedAt,
+      connectedAt: clearConnectedAt ? null : (connectedAt ?? this.connectedAt),
       messagesSent: messagesSent ?? this.messagesSent,
       messagesReceived: messagesReceived ?? this.messagesReceived,
+      connectedDeviceCount: connectedDeviceCount ?? this.connectedDeviceCount,
       buildingType: buildingType ?? this.buildingType,
       street: street ?? this.street,
       buildingNumber: buildingNumber ?? this.buildingNumber,
