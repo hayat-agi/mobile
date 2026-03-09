@@ -22,6 +22,7 @@ class Gateway {
   final String? postalCode;
   final double? latitude;
   final double? longitude;
+  final DateTime? lastLocationCheckAt;
 
   Gateway({
     required this.id,
@@ -45,6 +46,7 @@ class Gateway {
     this.postalCode,
     this.latitude,
     this.longitude,
+    this.lastLocationCheckAt,
   });
 
   bool get isConnected => status == GatewayStatus.connected;
@@ -74,6 +76,7 @@ class Gateway {
       'postalCode': postalCode,
       'latitude': latitude,
       'longitude': longitude,
+      'lastLocationCheckAt': lastLocationCheckAt?.toIso8601String(),
     };
   }
 
@@ -112,6 +115,9 @@ class Gateway {
       postalCode: json['postalCode'] as String?,
       latitude: (json['latitude'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble(),
+      lastLocationCheckAt: json['lastLocationCheckAt'] != null
+          ? DateTime.tryParse(json['lastLocationCheckAt'] as String)
+          : null,
     );
   }
 
@@ -138,6 +144,7 @@ class Gateway {
     String? postalCode,
     double? latitude,
     double? longitude,
+    DateTime? lastLocationCheckAt,
   }) {
     return Gateway(
       id: id ?? this.id,
@@ -161,6 +168,7 @@ class Gateway {
       postalCode: postalCode ?? this.postalCode,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      lastLocationCheckAt: lastLocationCheckAt ?? this.lastLocationCheckAt,
     );
   }
   

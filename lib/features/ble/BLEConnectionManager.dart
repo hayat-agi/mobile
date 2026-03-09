@@ -82,6 +82,22 @@ class BleConnection extends GetxController {
   // gateway held open. This flag defers the flip until the drain ends.
   bool _pendingDisasterModeOff = false;
 
+  // ── Heartbeat & Auto-Reconnect ──
+  // Sends PING every 30s while connected. If ESP32 doesn't reply twice in
+  // a row, we know the connection is dead and trigger a silent reconnect.
+  Timer? _heartbeatTimer;
+  int _heartbeatFailCount = 0;
+  bool _pingInFlight = false;
+  bool _heartbeatAutoReconnecting = false;
+  // Set true when the USER explicitly disconnects so heartbeat doesn't
+  // try to reconnect on their behalf.
+  bool _intentionalDisconnect = false;
+
+  static const Duration _heartbeatInterval = Duration(seconds: 30);
+  static const Duration _pingTimeout = Duration(seconds: 5);
+  static const int _maxHeartbeatFails = 2;
+  static const int _maxAutoReconnectAttempts = 10;
+
   // ── Queue & Auto-Reconnect state ──
   // Remembers the last device so we can reconnect without scanning.
   String? _lastDeviceId;
@@ -388,9 +404,11 @@ class BleConnection extends GetxController {
       isAuthenticated.value = true;
       status.value = 'Connected & ready';
       _lastDeviceId = r.device.remoteId.str;
-      
+      _intentionalDisconnect = false;
+
       // Start the timer to free the gateway if we don't do anything
       _resetAutoReleaseTimer();
+      _startHeartbeat();
     } catch (e) {
       status.value = 'Connection error: $e';
       await disconnect();
@@ -627,9 +645,13 @@ class BleConnection extends GetxController {
   // ═══════════════════════════════════════════════════════════════════════
 
   Future<void> disconnect() async {
-    // Tell the timer to stop
+    // Mark as intentional so heartbeat auto-reconnect doesn't fire
+    _intentionalDisconnect = true;
+
+    // Tell the timers to stop
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
+    _stopHeartbeat();
 
     // Stop all listeners first
     _cancelSubscriptions();
@@ -734,6 +756,7 @@ class BleConnection extends GetxController {
   void _onUnexpectedDisconnect() {
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
+    _stopHeartbeat();
     _cancelSubscriptions(
       delayResponseCancel: _isWaitingForActivationResponse,
     );
@@ -768,6 +791,7 @@ class BleConnection extends GetxController {
     _scanSub = null;
 
     _autoReleaseTimer?.cancel();
+    _heartbeatTimer?.cancel();
 
     if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
       if (delayResponseCancel) {
@@ -976,6 +1000,8 @@ class BleConnection extends GetxController {
       isConnected.value = true;
       isAuthenticated.value = true;
       status.value = 'Reconnected';
+      _intentionalDisconnect = false;
+      _startHeartbeat();
     } catch (e) {
       await disconnect();
     } finally {
@@ -1107,6 +1133,99 @@ class BleConnection extends GetxController {
       );
     }
     return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  HEARTBEAT — Detect silent BLE drops and reconnect automatically
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Starts a periodic PING→PONG probe.
+  /// Skips ticks when a queue drain is in progress to avoid response collisions.
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatFailCount = 0;
+    _pingInFlight = false;
+
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) async {
+      // Not connected — stop the timer, nothing to probe.
+      if (!isConnected.value) {
+        _stopHeartbeat();
+        return;
+      }
+
+      // Skip this tick — a drain or previous ping is still running.
+      if (_isDrainingQueue || _pingInFlight) return;
+
+      _pingInFlight = true;
+      try {
+        final response = await _writeAndWaitResponse('PING', timeout: _pingTimeout);
+        if (response == 'PONG') {
+          _heartbeatFailCount = 0; // connection is healthy
+          debugPrint('[Heartbeat] PONG received — connection healthy');
+        } else {
+          _heartbeatFailCount++;
+          debugPrint('[Heartbeat] No PONG (got: $response) — fail $_heartbeatFailCount/$_maxHeartbeatFails');
+          if (_heartbeatFailCount >= _maxHeartbeatFails) {
+            _stopHeartbeat();
+            _onUnexpectedDisconnect();
+            if (!_intentionalDisconnect && _lastDeviceId != null) {
+              _autoReconnectAfterHeartbeatFailure();
+            }
+          }
+        }
+      } finally {
+        _pingInFlight = false;
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _heartbeatFailCount = 0;
+    _pingInFlight = false;
+  }
+
+  /// Silently tries to reconnect after heartbeat detects a dead connection.
+  /// Uses exponential backoff (1s → 2s → 4s → … → 30s max) with jitter.
+  /// Stops if the user intentionally disconnects or reconnect succeeds.
+  Future<void> _autoReconnectAfterHeartbeatFailure() async {
+    if (_heartbeatAutoReconnecting) return;
+    _heartbeatAutoReconnecting = true;
+
+    final rng = Random();
+    final deviceId = _lastDeviceId!;
+
+    try {
+      for (int attempt = 0; attempt < _maxAutoReconnectAttempts; attempt++) {
+        if (isConnected.value || _intentionalDisconnect) break;
+
+        // Backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped) + jitter
+        final baseMs = attempt == 0 ? 1000 : (2000 * (1 << (attempt - 1))).clamp(0, 30000);
+        final jitterMs = rng.nextInt(1000);
+        await Future.delayed(Duration(milliseconds: baseMs + jitterMs));
+
+        if (_intentionalDisconnect) break;
+
+        status.value = 'Otomatik yeniden bağlanılıyor (${attempt + 1}/$_maxAutoReconnectAttempts)…';
+        debugPrint('[Heartbeat] Auto-reconnect attempt ${attempt + 1}/$_maxAutoReconnectAttempts');
+
+        // Fast path first, then full scan fallback
+        await _directReconnect(deviceId);
+        if (!isConnected.value) await connectById(deviceId);
+      }
+
+      if (isConnected.value) {
+        debugPrint('[Heartbeat] Auto-reconnect succeeded');
+        _startHeartbeat();
+        if (_messageQueue.isNotEmpty) _reconnectAndDrainQueue();
+      } else if (!_intentionalDisconnect) {
+        status.value = 'Bağlantı kurulamadı — lütfen manuel bağlanın';
+        debugPrint('[Heartbeat] Auto-reconnect exhausted all attempts');
+      }
+    } finally {
+      _heartbeatAutoReconnecting = false;
+    }
   }
 
   /// Called when this controller is destroyed (app closing, etc.)

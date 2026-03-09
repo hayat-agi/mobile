@@ -14,8 +14,16 @@ class GatewayService {
   GatewayService._internal();
 
   final ValueNotifier<List<Gateway>> gateways = ValueNotifier<List<Gateway>>([]);
+
+  /// Set to a gateway ID when a periodic location check is due after connect.
+  /// DashboardPage listens to this and performs the GPS comparison + prompt.
+  final ValueNotifier<String?> locationCheckNeeded = ValueNotifier<String?>(null);
+
   final Map<String, HouseholdProfile> _householdProfiles = {};
   final BleService _bleService = BleService();
+
+  // Re-check location every 90 days (~3 months)
+  static const int _locationCheckIntervalDays = 90;
 
   static const String _gatewaysStorageKey = 'persisted_gateways';
   bool _initialized = false;
@@ -259,7 +267,12 @@ class GatewayService {
         gateways.value = newList;
       }
 
-      // Step 3: Register this phone with a stable ID (idempotent on the ESP32).
+      // Step 3: Trigger a periodic location check if it's been 6 months.
+      // The actual GPS fetch + comparison is done in the UI layer (DashboardPage)
+      // so it can show a proper dialog without needing a BuildContext here.
+      _triggerLocationCheckIfDue(gatewayId);
+
+      // Step 4: Register this phone with a stable ID (idempotent on the ESP32).
       // Uses a stable random ID stored in SharedPreferences so repeated connects
       // and app reinstalls do not create duplicate registrations.
       final stableId = await DevicePasswordService().getOrCreateStableDeviceId();
@@ -356,8 +369,46 @@ class GatewayService {
     // TODO: Remove from local storage
   }
 
+  /// Signals the UI to perform a location check if the interval has elapsed.
+  void _triggerLocationCheckIfDue(String gatewayId) {
+    final gateway = getGateway(gatewayId);
+    if (gateway == null) return;
+
+    // Only check gateways that have stored coordinates to compare against
+    if (gateway.latitude == null || gateway.longitude == null) return;
+
+    final last = gateway.lastLocationCheckAt;
+    final isDue = last == null ||
+        DateTime.now().difference(last).inDays >= _locationCheckIntervalDays;
+
+    if (isDue) {
+      locationCheckNeeded.value = gatewayId;
+    }
+  }
+
+  /// Called by the UI after performing the location check (pass or fail).
+  /// Records today as the last check date so the interval resets.
+  void markLocationChecked(String gatewayId) {
+    final index = gateways.value.indexWhere((g) => g.id == gatewayId);
+    if (index == -1) return;
+
+    final updated = gateways.value[index].copyWith(
+      lastLocationCheckAt: DateTime.now(),
+    );
+    final newList = List<Gateway>.from(gateways.value);
+    newList[index] = updated;
+    gateways.value = newList;
+    _saveGateways();
+
+    // Clear the pending signal
+    if (locationCheckNeeded.value == gatewayId) {
+      locationCheckNeeded.value = null;
+    }
+  }
+
   void dispose() {
     gateways.dispose();
+    locationCheckNeeded.dispose();
   }
 }
 
