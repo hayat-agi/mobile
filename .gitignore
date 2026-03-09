@@ -103,3 +103,6 @@ Thumbs.db
 
 # Documents
 *.pdf
+
+# Claude Code
+CLAUDE.md

@@ -6,6 +6,8 @@ import '../../core/widgets/section_header.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_typography.dart';
+import '../../core/auth/auth_service.dart';
+import '../../core/routing/app_router.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -153,9 +155,7 @@ class _SettingsPageState extends State<SettingsPage> {
               color: theme.colorScheme.primary,
             ),
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Yakında eklenecek')),
-              );
+              Navigator.pushNamed(context, AppRouter.issueReport);
             },
             showDivider: false,
           ),
@@ -166,16 +166,15 @@ class _SettingsPageState extends State<SettingsPage> {
             title: 'Hesap',
             subtitle: 'Profil ve çıkış',
           ),
+          _buildUserInfo(theme),
           ListRow(
-            title: 'Profil',
+            title: 'Profil Düzenle',
             leading: Icon(
               Icons.person_outline,
               color: theme.colorScheme.primary,
             ),
             onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Yakında eklenecek')),
-              );
+              Navigator.pushNamed(context, AppRouter.profileEdit);
             },
             showDivider: false,
           ),
@@ -196,6 +195,45 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  Widget _buildUserInfo(ThemeData theme) {
+    final user = AuthService().currentUser.value;
+    if (user == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.screenPadding,
+        vertical: AppSpacing.sm,
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: theme.colorScheme.primaryContainer,
+            child: Text(
+              user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
+              style: AppTypography.titleMedium(context).copyWith(
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(user.fullName, style: AppTypography.titleMedium(context)),
+                Text(
+                  user.email,
+                  style: AppTypography.bodySmall(context).copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showLogoutDialog() {
     showDialog(
       context: context,
@@ -208,15 +246,16 @@ class _SettingsPageState extends State<SettingsPage> {
             child: const Text('İptal'),
           ),
           TextButton(
-            onPressed: () {
-              // TODO: Implement logout
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text('Çıkış yapıldı'),
-                  backgroundColor: AppColors.success,
-                ),
-              );
+            onPressed: () async {
+              Navigator.pop(context); // close dialog
+              await AuthService().logout();
+              if (context.mounted) {
+                Navigator.pushNamedAndRemoveUntil(
+                  context,
+                  AppRouter.login,
+                  (route) => false,
+                );
+              }
             },
             child: const Text(
               'Çıkış Yap',

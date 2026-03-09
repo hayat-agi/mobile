@@ -6,6 +6,14 @@ class HouseholdMember {
   final List<String> medicalConditions;
   final List<String> specialNeeds;
 
+  // Optional backend-sync fields (nullable for backward compatibility)
+  final String? tcNumber;
+  final String? gender;
+  final String? birthDate;
+  final String? bloodType;
+  final List<String>? medications;
+  final List<String>? prosthetics;
+
   HouseholdMember({
     required this.name,
     required this.age,
@@ -13,6 +21,12 @@ class HouseholdMember {
     this.isChild = false,
     this.medicalConditions = const [],
     this.specialNeeds = const [],
+    this.tcNumber,
+    this.gender,
+    this.birthDate,
+    this.bloodType,
+    this.medications,
+    this.prosthetics,
   });
 
   HouseholdMember copyWith({
@@ -22,6 +36,12 @@ class HouseholdMember {
     bool? isChild,
     List<String>? medicalConditions,
     List<String>? specialNeeds,
+    String? tcNumber,
+    String? gender,
+    String? birthDate,
+    String? bloodType,
+    List<String>? medications,
+    List<String>? prosthetics,
   }) {
     return HouseholdMember(
       name: name ?? this.name,
@@ -30,6 +50,12 @@ class HouseholdMember {
       isChild: isChild ?? this.isChild,
       medicalConditions: medicalConditions ?? this.medicalConditions,
       specialNeeds: specialNeeds ?? this.specialNeeds,
+      tcNumber: tcNumber ?? this.tcNumber,
+      gender: gender ?? this.gender,
+      birthDate: birthDate ?? this.birthDate,
+      bloodType: bloodType ?? this.bloodType,
+      medications: medications ?? this.medications,
+      prosthetics: prosthetics ?? this.prosthetics,
     );
   }
 
@@ -41,6 +67,12 @@ class HouseholdMember {
       'isChild': isChild,
       'medicalConditions': medicalConditions,
       'specialNeeds': specialNeeds,
+      if (tcNumber != null) 'tcNumber': tcNumber,
+      if (gender != null) 'gender': gender,
+      if (birthDate != null) 'birthDate': birthDate,
+      if (bloodType != null) 'bloodType': bloodType,
+      if (medications != null) 'medications': medications,
+      if (prosthetics != null) 'prosthetics': prosthetics,
     };
   }
 
@@ -58,6 +90,16 @@ class HouseholdMember {
               ?.map((e) => e as String)
               .toList() ??
           [],
+      tcNumber: json['tcNumber'] as String?,
+      gender: json['gender'] as String?,
+      birthDate: json['birthDate'] as String?,
+      bloodType: json['bloodType'] as String?,
+      medications: (json['medications'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList(),
+      prosthetics: (json['prosthetics'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList(),
     );
   }
 }

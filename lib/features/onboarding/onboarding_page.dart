@@ -40,7 +40,7 @@ class OnboardingPage extends StatelessWidget {
                 label: 'Başla',
                 icon: Icons.arrow_forward,
                 onPressed: () {
-                  Navigator.pushReplacementNamed(context, AppRouter.dashboard);
+                  Navigator.pushReplacementNamed(context, AppRouter.login);
                 },
               ),
             ],

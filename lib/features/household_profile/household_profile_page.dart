@@ -6,6 +6,8 @@ import '../../models/pet.dart';
 import '../../models/emergency_contact.dart';
 import '../../services/gateway_service.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/api/household_sync_service.dart';
+import '../../core/auth/auth_service.dart';
 
 class HouseholdProfilePage extends StatefulWidget {
   final String gatewayId;
@@ -244,15 +246,33 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
 
     await _gatewayService.saveHouseholdProfile(profile);
 
-    if (mounted) {
+    // Sync to backend if authenticated
+    if (AuthService().authState.value == AuthState.authenticated) {
+      final synced = await HouseholdSyncService().syncHousehold(
+        gatewayId: widget.gatewayId,
+        members: _members,
+        pets: _pets,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(synced
+                ? 'Profil kaydedildi ve senkronize edildi'
+                : 'Profil kaydedildi (senkronizasyon başarısız)'),
+            backgroundColor: synced ? AppColors.success : AppColors.warning,
+          ),
+        );
+      }
+    } else if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text('Profil kaydedildi'),
           backgroundColor: AppColors.success,
         ),
       );
-      Navigator.pop(context);
     }
+
+    if (mounted) Navigator.pop(context);
   }
 
   @override
