@@ -105,13 +105,13 @@ class BleConstants {
   /// Max messages a single phone may send per connection cycle in
   /// disaster mode.  After this many it disconnects so the next
   /// survivor can take a turn.
-  static const int maxMessagesPerDrain = 2;
+  static const int maxMessagesPerDrain = 3;
 
-  /// Maximum messages allowed in the queue.  Oldest messages are
-  /// dropped when new ones arrive beyond this limit.
-  static const int maxQueueSize = 3;
+  /// Maximum messages allowed in the queue.
+  /// Large enough to hold multiple SOS + triage payloads per household.
+  static const int maxQueueSize = 20;
 
   /// Minimum pause between drain cycles in disaster mode so one
   /// phone cannot monopolize the gateway.
-  static const Duration drainCooldown = Duration(seconds: 10);
+  static const Duration drainCooldown = Duration(seconds: 5);
 }

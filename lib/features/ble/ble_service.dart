@@ -217,6 +217,20 @@ class BleService {
     return _bleConnection.sendHexPayload(payload);
   }
 
+  /// Sends binary payload immediately when connected; if not connected or
+  /// if the direct send fails, encodes as hex and queues for retry.
+  /// Never silently drops — the payload is always delivered or persisted.
+  Future<void> sendBinaryQueued(Uint8List payload) async {
+    return _bleConnection.sendBinaryQueued(payload);
+  }
+
+  // ── Disaster Mode ───────────────────────────────────────────────
+
+  /// Safely deactivates disaster mode, deferring if a drain is in progress.
+  void deactivateDisasterMode() {
+    _bleConnection.deactivateDisasterMode();
+  }
+
   // ── Device Registration ──────────────────────────────────────────
 
   /// Register this phone with the ESP32 using a stable app-provided ID.

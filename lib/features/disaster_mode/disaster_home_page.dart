@@ -51,8 +51,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   @override
   void dispose() {
-    // Deactivate disaster mode: return to normal 3s idle timer
-    BleService().bleConnection.disasterMode = false;
+    // Deactivate disaster mode safely — defers if a queue drain is in progress
+    // so the auto-release-after-send behaviour isn't cut off mid-flight.
+    BleService().deactivateDisasterMode();
 
     _manualTextController.dispose();
     Get.delete<DisasterController>();
@@ -72,10 +73,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       SnackBar(
         content: Text(
           success
-              ? 'Durum bilgisi gönderildi'
-              : _ctrl.isConnected
-                  ? 'Gönderim başarısız — tekrar deneyin'
-                  : 'Gateway bağlantısı yok',
+              ? (_ctrl.isConnected
+                  ? 'Durum bilgisi gönderildi'
+                  : 'Kuyruğa alındı — bağlantı kurulunca iletilecek')
+              : 'Gateway eklenmemiş — önce bir gateway ekleyin',
         ),
         backgroundColor: success ? AppColors.success : AppColors.danger,
         duration: const Duration(seconds: 3),
@@ -101,8 +102,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       SnackBar(
         content: Text(
           success
-              ? (_ctrl.isConnected ? 'Mesaj gönderildi' : 'Mesaj kuyruğa eklendi')
-              : 'Mesaj gönderilemedi',
+              ? (_ctrl.isConnected
+                  ? 'Mesaj gönderildi'
+                  : 'Kuyruğa alındı — bağlantıda iletilecek')
+              : 'Gateway eklenmemiş — önce bir gateway ekleyin',
         ),
         backgroundColor: success ? AppColors.success : AppColors.danger,
         duration: const Duration(seconds: 2),
@@ -393,7 +396,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       final isSending = _ctrl.isSending.value;
       final hasStatus = _ctrl.selectedStatus.value != null;
       final connected = _ctrl.isConnected;
-      final enabled = canSend && hasStatus && connected && !isSending;
+      // Button stays enabled when disconnected — payload will be queued
+      // and delivered automatically when the connection is restored.
+      final enabled = canSend && hasStatus && !isSending;
 
       final color = enabled ? _ctrl.triageCategory.value.color : Colors.grey.shade700;
 
@@ -445,12 +450,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
           ),
 
           // Status hints
-          if (!connected)
+          if (!connected && hasStatus)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Gateway bağlantısı gerekli',
-                style: TextStyle(color: AppColors.danger, fontSize: 12),
+                'Bağlantı yok — gönderilince iletilecek',
+                style: TextStyle(color: Colors.orange, fontSize: 12),
               ),
             ),
           if (!canSend)

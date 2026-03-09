@@ -77,6 +77,11 @@ class BleConnection extends GetxController {
   // so the next person in the building can connect faster.
   bool disasterMode = false;
 
+  // When the disaster screen is disposed while a drain is in progress,
+  // we can't flip disasterMode off immediately — it would leave the
+  // gateway held open. This flag defers the flip until the drain ends.
+  bool _pendingDisasterModeOff = false;
+
   // ── Queue & Auto-Reconnect state ──
   // Remembers the last device so we can reconnect without scanning.
   String? _lastDeviceId;
@@ -863,7 +868,12 @@ class BleConnection extends GetxController {
         sent++;
 
         if (response == null) {
-          messages.add('[System] No response for queued message');
+          // Write timed out — restore message at front of queue so it
+          // is the first thing retried on the next connection.
+          _messageQueue.insert(0, msg);
+          _persistQueue();
+          messages.add('[System] Gönderim başarısız — mesaj yeniden kuyruğa alındı');
+          break; // Stop this drain cycle; reconnect will retry
         } else if (response != BleConstants.respMsgOk) {
           messages.add('ESP32: $response');
         }
@@ -875,6 +885,14 @@ class BleConnection extends GetxController {
       messages.add('[System] Queue send error: $e');
     } finally {
       _isDrainingQueue = false;
+
+      // Apply deferred disaster-mode deactivation (set when screen disposed
+      // mid-drain so we didn't cut off the auto-release behaviour).
+      if (_pendingDisasterModeOff) {
+        disasterMode = false;
+        _pendingDisasterModeOff = false;
+      }
+
       // If new messages were added while we were draining, start again
       // (with cooldown in disaster mode so we don't hog the gateway)
       if (_messageQueue.isNotEmpty && _lastDeviceId != null) {
@@ -1027,6 +1045,42 @@ class BleConnection extends GetxController {
   // ═══════════════════════════════════════════════════════════════════════
   //  DEVICE COUNT — Query how many mobile devices are registered on the ESP32
   // ═══════════════════════════════════════════════════════════════════════
+
+  /// Safely deactivates disaster mode.
+  /// If a drain is in progress, defers the flag flip until the drain
+  /// finishes so the auto-release-after-send behaviour isn't cut off.
+  void deactivateDisasterMode() {
+    if (_isDrainingQueue) {
+      _pendingDisasterModeOff = true;
+    } else {
+      disasterMode = false;
+    }
+  }
+
+  /// Sends a binary payload immediately when connected, or encodes it as a
+  /// hex string and pushes it through the text queue when disconnected.
+  ///
+  /// This gives the triage payload the same persistent, retrying delivery
+  /// guarantee that text SOS messages already have.
+  /// The ESP32 receives "BIN:<hex>" as an unknown command and replies MSG_OK,
+  /// which is sufficient for the current protocol version.
+  Future<void> sendBinaryQueued(Uint8List payload) async {
+    if (payload.isEmpty) return;
+    if (_lastDeviceId == null) {
+      throw StateError('No gateway available — set lastDeviceId first');
+    }
+
+    // If connected, try raw binary first (fastest path)
+    if (isConnected.value && _rx != null) {
+      final success = await sendHexPayload(payload);
+      if (success) return;
+      // Direct send failed — fall through to queue
+    }
+
+    // Encode as hex and queue with full retry/persistence support
+    final hex = payload.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    await send('BIN:$hex');
+  }
 
   /// Registers this phone with the ESP32 using a stable app-provided ID.
   /// The ESP32 stores it in NVS — idempotent, so re-sending same ID is a no-op.
