@@ -1,6 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'package:torch_light/torch_light.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'controllers/disaster_controller.dart';
 import 'models/disaster_enums.dart';
 import 'widgets/status_action_button.dart';
@@ -19,6 +24,9 @@ import '../ble/ble_service.dart';
 ///   • Real-time triage score display
 ///   • Bitmask payload sent via BLE
 ///   • 15-minute debounce between sends
+///   • Voice-to-text message input
+///   • Flashlight SOS beacon (morse ··· — — — ···)
+///   • Audio beacon (TTS "YARDIM!" every 30s)
 class DisasterHomePage extends StatefulWidget {
   const DisasterHomePage({super.key});
 
@@ -29,6 +37,19 @@ class DisasterHomePage extends StatefulWidget {
 class _DisasterHomePageState extends State<DisasterHomePage> {
   late final DisasterController _ctrl;
   final _manualTextController = TextEditingController();
+
+  // ── Voice-to-text ──────────────────────────────────────────────────
+  final _speech = SpeechToText();
+  bool _speechAvailable = false;
+  bool _isListening = false;
+
+  // ── Flashlight SOS ────────────────────────────────────────────────
+  bool _isFlashlightActive = false;
+
+  // ── Audio beacon (TTS) ────────────────────────────────────────────
+  final _tts = FlutterTts();
+  bool _isSoundActive = false;
+  Timer? _soundTimer;
 
   @override
   void initState() {
@@ -47,20 +68,198 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
         systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
+
+    _initSpeech();
+    _initTts();
   }
 
   @override
   void dispose() {
     // Deactivate disaster mode safely — defers if a queue drain is in progress
-    // so the auto-release-after-send behaviour isn't cut off mid-flight.
     BleService().deactivateDisasterMode();
 
     _manualTextController.dispose();
+
+    // Stop all beacons
+    _isFlashlightActive = false;
+    TorchLight.disableTorch().catchError((_) {});
+    _stopSoundBeacon();
+    _speech.cancel();
+
     Get.delete<DisasterController>();
     super.dispose();
   }
 
-  // ─── Send handler ──────────────────────────────────────────────────
+  // ─── Speech init ───────────────────────────────────────────────────
+
+  Future<void> _initSpeech() async {
+    final available = await _speech.initialize(
+      onError: (_) => setState(() => _isListening = false),
+      onStatus: (status) {
+        if (status == 'done' || status == 'notListening') {
+          setState(() => _isListening = false);
+        }
+      },
+    );
+    setState(() => _speechAvailable = available);
+  }
+
+  // ─── TTS init ──────────────────────────────────────────────────────
+
+  Future<void> _initTts() async {
+    await _tts.setLanguage('tr-TR');
+    await _tts.setVolume(1.0);
+    await _tts.setSpeechRate(0.8);
+  }
+
+  // ─── Voice-to-text ─────────────────────────────────────────────────
+
+  Future<void> _toggleListening() async {
+    if (_isListening) {
+      await _speech.stop();
+      setState(() => _isListening = false);
+      return;
+    }
+
+    // Request microphone permission
+    final micPerm = await Permission.microphone.request();
+    if (!micPerm.isGranted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Mikrofon izni gerekli'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!_speechAvailable) {
+      // Try re-initializing
+      await _initSpeech();
+      if (!_speechAvailable) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Sesli giriş bu cihazda desteklenmiyor'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    setState(() => _isListening = true);
+    await _speech.listen(
+      onResult: (result) {
+        _manualTextController.text = result.recognizedWords;
+        _manualTextController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _manualTextController.text.length),
+        );
+      },
+      localeId: 'tr_TR',
+      listenOptions: SpeechListenOptions(listenMode: ListenMode.dictation),
+    );
+  }
+
+  // ─── Flashlight SOS ────────────────────────────────────────────────
+
+  Future<void> _toggleFlashlight() async {
+    if (_isFlashlightActive) {
+      setState(() => _isFlashlightActive = false);
+      await TorchLight.disableTorch().catchError((_) {});
+      return;
+    }
+
+    // Check if device has a flashlight
+    try {
+      final hasFlash = await TorchLight.isTorchAvailable();
+      if (!hasFlash) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Bu cihazda fener bulunamadı'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+    } catch (_) {}
+
+    setState(() => _isFlashlightActive = true);
+    HapticFeedback.heavyImpact();
+    _runSosPattern(); // runs until _isFlashlightActive = false
+  }
+
+  /// Repeating SOS morse pattern: ··· — — — ···
+  /// Short = 200ms, Long = 600ms, letter gap = 400ms, word gap = 2000ms
+  Future<void> _runSosPattern() async {
+    const shortMs = 200;
+    const longMs = 600;
+    const offMs = 200;
+    const letterGapMs = 400;
+    const wordGapMs = 2000;
+
+    Future<void> flash(int onMs, int nextGapMs) async {
+      if (!_isFlashlightActive) return;
+      await TorchLight.enableTorch().catchError((_) {});
+      await Future.delayed(Duration(milliseconds: onMs));
+      await TorchLight.disableTorch().catchError((_) {});
+      await Future.delayed(Duration(milliseconds: nextGapMs));
+    }
+
+    while (_isFlashlightActive) {
+      // S: · · ·
+      await flash(shortMs, offMs);
+      await flash(shortMs, offMs);
+      await flash(shortMs, letterGapMs);
+      if (!_isFlashlightActive) break;
+
+      // O: — — —
+      await flash(longMs, offMs);
+      await flash(longMs, offMs);
+      await flash(longMs, letterGapMs);
+      if (!_isFlashlightActive) break;
+
+      // S: · · ·
+      await flash(shortMs, offMs);
+      await flash(shortMs, offMs);
+      await flash(shortMs, wordGapMs);
+    }
+
+    await TorchLight.disableTorch().catchError((_) {});
+  }
+
+  // ─── Audio beacon ──────────────────────────────────────────────────
+
+  Future<void> _toggleSound() async {
+    if (_isSoundActive) {
+      _stopSoundBeacon();
+      return;
+    }
+    setState(() => _isSoundActive = true);
+    HapticFeedback.heavyImpact();
+
+    // Speak immediately, then every 30 seconds
+    await _speakBeacon();
+    _soundTimer = Timer.periodic(const Duration(seconds: 30), (_) => _speakBeacon());
+  }
+
+  Future<void> _speakBeacon() async {
+    await _tts.speak('YARDIM! YARDIM! YARDIM! Bina altındayım!');
+  }
+
+  void _stopSoundBeacon() {
+    _soundTimer?.cancel();
+    _soundTimer = null;
+    _tts.stop();
+    setState(() => _isSoundActive = false);
+  }
+
+  // ─── Send handlers ─────────────────────────────────────────────────
 
   Future<void> _onSend() async {
     HapticFeedback.mediumImpact();
@@ -207,12 +406,16 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                   _buildSendButton(),
                   const SizedBox(height: 16),
 
-                  // Manual text input
+                  // Manual text input with voice-to-text
                   _buildManualTextInput(),
                   const SizedBox(height: 16),
 
                   // Messages link
                   _buildMessagesButton(),
+                  const SizedBox(height: 16),
+
+                  // Flashlight & sound beacons
+                  _buildBeaconSection(),
                   const SizedBox(height: 24),
                 ],
               ],
@@ -470,7 +673,8 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       );
     });
   }
-  // ─── Manual text input ──────────────────────────────────────────────
+
+  // ─── Manual text input with voice-to-text ──────────────────────────
 
   Widget _buildManualTextInput() {
     return Container(
@@ -478,7 +682,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       decoration: BoxDecoration(
         color: Colors.grey.shade900,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey.shade700, width: 0.5),
+        border: Border.all(
+          color: _isListening ? Colors.red : Colors.grey.shade700,
+          width: _isListening ? 1.5 : 0.5,
+        ),
       ),
       child: Row(
         children: [
@@ -488,8 +695,11 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
               enabled: true,
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: 'Mesaj yaz...',
-                hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 14),
+                hintText: _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
+                hintStyle: TextStyle(
+                  color: _isListening ? Colors.red.shade300 : Colors.grey.shade500,
+                  fontSize: 14,
+                ),
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
@@ -498,7 +708,30 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
               onSubmitted: (_) => _onManualSend(),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
+
+          // Voice-to-text mic button
+          GestureDetector(
+            onTap: _toggleListening,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _isListening
+                    ? Colors.red.withValues(alpha: 0.25)
+                    : Colors.grey.shade800,
+              ),
+              child: Icon(
+                _isListening ? Icons.mic : Icons.mic_none,
+                size: 20,
+                color: _isListening ? Colors.red : Colors.white54,
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+
+          // Send button
           GestureDetector(
             onTap: _onManualSend,
             child: Container(
@@ -536,6 +769,131 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Beacon section ────────────────────────────────────────────────
+
+  Widget _buildBeaconSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'KONUM SİNYALİ',
+          style: TextStyle(
+            color: Colors.white38,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            // Flashlight SOS button
+            Expanded(
+              child: _BeaconButton(
+                icon: Icons.flashlight_on,
+                label: 'Fener SOS',
+                sublabel: _isFlashlightActive ? 'AKTİF — ··· — — — ···' : 'Morse kodu',
+                isActive: _isFlashlightActive,
+                activeColor: const Color(0xFFF59E0B),
+                onTap: _toggleFlashlight,
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Audio beacon button
+            Expanded(
+              child: _BeaconButton(
+                icon: Icons.campaign,
+                label: 'Ses Sinyali',
+                sublabel: _isSoundActive ? 'AKTİF — her 30s' : '"YARDIM!" sesi',
+                isActive: _isSoundActive,
+                activeColor: const Color(0xFFEF4444),
+                onTap: _toggleSound,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Helper: beacon button ───────────────────────────────────────────
+
+class _BeaconButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String sublabel;
+  final bool isActive;
+  final Color activeColor;
+  final VoidCallback onTap;
+
+  const _BeaconButton({
+    required this.icon,
+    required this.label,
+    required this.sublabel,
+    required this.isActive,
+    required this.activeColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        decoration: BoxDecoration(
+          color: isActive
+              ? activeColor.withValues(alpha: 0.15)
+              : Colors.grey.shade900,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isActive ? activeColor : Colors.grey.shade700,
+            width: isActive ? 1.5 : 0.5,
+          ),
+          boxShadow: isActive
+              ? [
+                  BoxShadow(
+                    color: activeColor.withValues(alpha: 0.3),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                  )
+                ]
+              : null,
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              size: 28,
+              color: isActive ? activeColor : Colors.white38,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: isActive ? activeColor : Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              sublabel,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isActive ? activeColor.withValues(alpha: 0.8) : Colors.white30,
+                fontSize: 10,
+              ),
+            ),
+          ],
         ),
       ),
     );
