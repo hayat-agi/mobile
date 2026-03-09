@@ -16,6 +16,7 @@ class Gateway {
   final String? street;
   final String? buildingNumber;
   final String? doorNumber;
+  final String? neighborhood;
   final String? district;
   final String? city;
   final String? postalCode;
@@ -38,6 +39,7 @@ class Gateway {
     this.street,
     this.buildingNumber,
     this.doorNumber,
+    this.neighborhood,
     this.district,
     this.city,
     this.postalCode,
@@ -66,6 +68,7 @@ class Gateway {
       'street': street,
       'buildingNumber': buildingNumber,
       'doorNumber': doorNumber,
+      'neighborhood': neighborhood,
       'district': district,
       'city': city,
       'postalCode': postalCode,
@@ -103,6 +106,7 @@ class Gateway {
       street: json['street'] as String?,
       buildingNumber: json['buildingNumber'] as String?,
       doorNumber: json['doorNumber'] as String?,
+      neighborhood: json['neighborhood'] as String?,
       district: json['district'] as String?,
       city: json['city'] as String?,
       postalCode: json['postalCode'] as String?,
@@ -128,6 +132,7 @@ class Gateway {
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
@@ -150,6 +155,7 @@ class Gateway {
       street: street ?? this.street,
       buildingNumber: buildingNumber ?? this.buildingNumber,
       doorNumber: doorNumber ?? this.doorNumber,
+      neighborhood: neighborhood ?? this.neighborhood,
       district: district ?? this.district,
       city: city ?? this.city,
       postalCode: postalCode ?? this.postalCode,
@@ -185,6 +191,7 @@ class Gateway {
     if (doorNumber != null && doorNumber!.isNotEmpty) {
       parts.add('Daire: $doorNumber');
     }
+    if (neighborhood != null && neighborhood!.isNotEmpty) parts.add(neighborhood!);
     if (district != null && district!.isNotEmpty) parts.add(district!);
     if (city != null && city!.isNotEmpty) parts.add(city!);
     if (postalCode != null && postalCode!.isNotEmpty) {

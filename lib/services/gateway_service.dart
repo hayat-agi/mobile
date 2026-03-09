@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/gateway.dart';
 import '../models/household_profile.dart';
 import '../features/ble/ble_service.dart';
+import 'device_password_service.dart';
 
 class GatewayService {
   static final GatewayService _instance = GatewayService._internal();
@@ -112,6 +113,7 @@ class GatewayService {
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
@@ -139,6 +141,7 @@ class GatewayService {
       street: street?.trim().isEmpty == true ? null : street?.trim(),
       buildingNumber: buildingNumber?.trim().isEmpty == true ? null : buildingNumber?.trim(),
       doorNumber: doorNumber?.trim().isEmpty == true ? null : doorNumber?.trim(),
+      neighborhood: neighborhood?.trim().isEmpty == true ? null : neighborhood?.trim(),
       district: district?.trim().isEmpty == true ? null : district?.trim(),
       city: city?.trim().isEmpty == true ? null : city?.trim(),
       postalCode: postalCode?.trim().isEmpty == true ? null : postalCode?.trim(),
@@ -256,7 +259,13 @@ class GatewayService {
         gateways.value = newList;
       }
 
-      // Step 3: Query how many mobile devices are registered on this gateway.
+      // Step 3: Register this phone with a stable ID (idempotent on the ESP32).
+      // Uses a stable random ID stored in SharedPreferences so repeated connects
+      // and app reinstalls do not create duplicate registrations.
+      final stableId = await DevicePasswordService().getOrCreateStableDeviceId();
+      await _bleService.registerDevice(stableId);
+
+      // Step 4: Query how many mobile devices are registered on this gateway.
       // Only devices registered to THIS gateway count — not nearby devices on others.
       final deviceCount = await _bleService.queryDeviceCount();
       if (deviceCount != null) {

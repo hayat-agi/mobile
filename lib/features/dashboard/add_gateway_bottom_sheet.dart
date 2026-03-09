@@ -24,6 +24,7 @@ class AddGatewayBottomSheet extends StatefulWidget {
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
@@ -47,6 +48,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   final TextEditingController _streetController = TextEditingController();
   final TextEditingController _buildingNumberController = TextEditingController();
   final TextEditingController _doorNumberController = TextEditingController();
+  final TextEditingController _neighborhoodController = TextEditingController();
   final TextEditingController _districtController = TextEditingController();
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _postalCodeController = TextEditingController();
@@ -79,6 +81,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
     _streetController.dispose();
     _buildingNumberController.dispose();
     _doorNumberController.dispose();
+    _neighborhoodController.dispose();
     _districtController.dispose();
     _cityController.dispose();
     _postalCodeController.dispose();
@@ -156,18 +159,12 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
         final activationNeeded = await _bleService.waitForActivationPrompt();
         debugPrint('[ADD_GW] activationNeeded=$activationNeeded, mounted=$mounted');
 
-        final bool showActivation;
-        if (activationNeeded) {
-          // ESP32 explicitly signalled it needs activation
-          showActivation = true;
-        } else {
-          // Notification missed or device already active — use local record
-          final locallyActivated = await DevicePasswordService().isActivated(deviceId);
-          showActivation = !locallyActivated;
-          debugPrint('[ADD_GW] locallyActivated=$locallyActivated → showActivation=$showActivation');
-        }
-
-        if (showActivation && mounted) {
+        // The ESP32 is the source of truth.
+        // It only sends NEED_ACTIVATION when genuinely unactivated (NVS flag = false).
+        // If no NEED_ACTIVATION arrives within the timeout, the device is already
+        // activated — regardless of what the local app cache says.
+        // (The local cache is wiped on reinstall, which previously caused a false dialog.)
+        if (activationNeeded && mounted) {
           debugPrint('[ADD_GW] Showing activation dialog...');
           final activated = await showActivationDialog(context);
           debugPrint('[ADD_GW] Activation dialog result: activated=$activated');
@@ -184,7 +181,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
             return;
           }
 
-          // Device activated — mark locally so next add skips the dialog
+          // Cache activation state locally (used for future reference only)
           await DevicePasswordService().markActivated(deviceId);
         }
 
@@ -389,30 +386,47 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
         if (placemarks.isNotEmpty && mounted) {
           final place = placemarks.first;
 
-          // Debug: print all available fields
+          // Debug: print all available placemark fields
+          // In Turkey: street=mahalle adı, thoroughfare=gerçek cadde/sokak, subLocality=mahalle
           debugPrint('[Location] Placemark: '
               'street=${place.street}, '
+              'thoroughfare=${place.thoroughfare}, '
+              'subThoroughfare=${place.subThoroughfare}, '
               'subLocality=${place.subLocality}, '
               'locality=${place.locality}, '
               'subAdminArea=${place.subAdministrativeArea}, '
               'adminArea=${place.administrativeArea}, '
-              'postalCode=${place.postalCode}, '
-              'thoroughfare=${place.thoroughfare}, '
-              'subThoroughfare=${place.subThoroughfare}');
+              'postalCode=${place.postalCode}');
 
           setState(() {
-            // Sokak/Cadde: street genelde daha doğru (Türkiye'de),
-            // thoroughfare bazen farklı sonuç verebilir
+            // Sokak/Cadde: Türkiye'de place.street genellikle mahalle adını döner.
+            // place.thoroughfare gerçek cadde/sokak adını içerir.
             if (_streetController.text.isEmpty) {
-              final street = place.street ?? place.thoroughfare;
+              final street = place.thoroughfare ?? place.street;
               if (street != null && street.isNotEmpty) {
                 _streetController.text = street;
               }
             }
+            // Bina No: subThoroughfare = kapı/bina numarası
+            if (_buildingNumberController.text.isEmpty) {
+              final buildingNo = place.subThoroughfare;
+              if (buildingNo != null && buildingNo.isNotEmpty) {
+                _buildingNumberController.text = buildingNo;
+              }
+            }
+            // Mahalle: subLocality = mahalle
+            if (_neighborhoodController.text.isEmpty) {
+              final neighborhood = place.subLocality;
+              if (neighborhood != null && neighborhood.isNotEmpty) {
+                _neighborhoodController.text = neighborhood;
+              }
+            }
             // İlçe: subAdministrativeArea = ilçe (Türkiye'de doğru alan)
-            // subLocality = mahalle (bu ilçe DEĞİL)
+            // locality = ilçe için fallback
             if (_districtController.text.isEmpty) {
-              final district = place.subAdministrativeArea;
+              final district = place.subAdministrativeArea?.isNotEmpty == true
+                  ? place.subAdministrativeArea
+                  : place.locality;
               if (district != null && district.isNotEmpty) {
                 _districtController.text = district;
               }
@@ -493,15 +507,18 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
 
     widget.onAdd(
       _gatewayIdController.text.trim(),
-      _nameController.text.trim().isEmpty 
-          ? null 
+      _nameController.text.trim().isEmpty
+          ? null
           : _nameController.text.trim(),
       _selectedBuildingType,
       _streetController.text.trim(),
       _buildingNumberController.text.trim(),
-      _doorNumberController.text.trim().isEmpty 
-          ? null 
+      _doorNumberController.text.trim().isEmpty
+          ? null
           : _doorNumberController.text.trim(),
+      _neighborhoodController.text.trim().isEmpty
+          ? null
+          : _neighborhoodController.text.trim(),
       _districtController.text.trim(),
       _cityController.text.trim(),
       _postalCodeController.text.trim(),
@@ -879,7 +896,19 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                         textInputAction: TextInputAction.next,
                       ),
                       const SizedBox(height: AppSpacing.md),
-                      
+
+                      // Neighborhood
+                      TextFormField(
+                        controller: _neighborhoodController,
+                        decoration: const InputDecoration(
+                          labelText: 'Mahalle',
+                          hintText: 'Mahalle adı (opsiyonel)',
+                          prefixIcon: Icon(Icons.holiday_village_outlined),
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+
                       // District
                       TextFormField(
                         controller: _districtController,

@@ -62,6 +62,10 @@ class BleConstants {
   /// Prefix for the device count response — full format: "DEVICE_COUNT_3"
   static const String respDeviceCountPrefix = 'DEVICE_COUNT_';
 
+  /// Register this phone with a stable ID — full format: "REGISTER:<id>"
+  /// The ESP32 stores the ID in NVS (idempotent — re-registering same ID is a no-op).
+  static const String cmdRegisterPrefix = 'REGISTER:';
+
   // ── Timing Settings ─────────────────────────────────────────────
 
   /// Max MTU (message size) — we don't negotiate this right now

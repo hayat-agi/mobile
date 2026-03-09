@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DevicePasswordService {
@@ -110,6 +111,26 @@ class DevicePasswordService {
   Future<void> clearActivated(String deviceId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_activatedPrefix$deviceId');
+  }
+
+  // ── Stable Phone Identity ─────────────────────────────────────────────
+
+  static const String _stableDeviceIdKey = 'stable_phone_id';
+
+  /// Returns a stable random ID for this phone installation.
+  /// Generated once and persisted in SharedPreferences.
+  /// Used to register with the ESP32 so the count doesn't grow on reconnects.
+  Future<String> getOrCreateStableDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(_stableDeviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    final rng = Random.secure();
+    final id = List.generate(16, (_) => rng.nextInt(256))
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    await prefs.setString(_stableDeviceIdKey, id);
+    return id;
   }
 }
 

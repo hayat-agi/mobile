@@ -217,6 +217,14 @@ class BleService {
     return _bleConnection.sendHexPayload(payload);
   }
 
+  // ── Device Registration ──────────────────────────────────────────
+
+  /// Register this phone with the ESP32 using a stable app-provided ID.
+  /// Idempotent — sending the same ID again is a no-op on the ESP32.
+  Future<bool> registerDevice(String stableId) async {
+    return _bleConnection.registerDevice(stableId);
+  }
+
   // ── Device Count ────────────────────────────────────────────────
 
   /// Query how many mobile devices are registered on the connected ESP32.

@@ -1028,6 +1028,17 @@ class BleConnection extends GetxController {
   //  DEVICE COUNT — Query how many mobile devices are registered on the ESP32
   // ═══════════════════════════════════════════════════════════════════════
 
+  /// Registers this phone with the ESP32 using a stable app-provided ID.
+  /// The ESP32 stores it in NVS — idempotent, so re-sending same ID is a no-op.
+  /// Returns true if the ESP32 confirmed with MSG_OK.
+  Future<bool> registerDevice(String stableId) async {
+    if (_rx == null || !isConnected.value) return false;
+    final response = await _writeAndWaitResponse(
+      '${BleConstants.cmdRegisterPrefix}$stableId',
+    );
+    return response == BleConstants.respMsgOk;
+  }
+
   /// Sends GET_DEVICE_COUNT to the ESP32 and returns the parsed count.
   /// Returns null if not connected or the response is unexpected.
   Future<int?> queryDeviceCount() async {
