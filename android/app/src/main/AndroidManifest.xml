@@ -2,6 +2,9 @@
     <!-- Internet permission for backend API communication -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Microphone for speech-to-text in disaster mode -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- BLE Permissions for Android 12+ (API 31+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />

@@ -54,6 +54,15 @@ dependencies:
   # Secure storage
   flutter_secure_storage: ^9.0.0
 
+  # Location
+  geolocator: ^13.0.2
+  geocoding: ^3.0.0
+
+  # Disaster mode helpers
+  torch_light: ^1.0.0
+  speech_to_text: ^7.0.0
+  flutter_tts: ^4.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
