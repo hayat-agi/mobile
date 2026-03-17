@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/gateway.dart';
 import '../models/household_profile.dart';
 import '../features/ble/ble_service.dart';
+import 'device_password_service.dart';
 
 class GatewayService {
   static final GatewayService _instance = GatewayService._internal();
@@ -12,11 +14,36 @@ class GatewayService {
   GatewayService._internal();
 
   final ValueNotifier<List<Gateway>> gateways = ValueNotifier<List<Gateway>>([]);
+
+  /// Set to a gateway ID when a periodic location check is due after connect.
+  /// DashboardPage listens to this and performs the GPS comparison + prompt.
+  final ValueNotifier<String?> locationCheckNeeded = ValueNotifier<String?>(null);
+
   final Map<String, HouseholdProfile> _householdProfiles = {};
   final BleService _bleService = BleService();
 
+  // Re-check location every 90 days (~3 months)
+  static const int _locationCheckIntervalDays = 90;
+
   static const String _gatewaysStorageKey = 'persisted_gateways';
   bool _initialized = false;
+
+  /// Syncs gateway statuses when the BLE connection drops unexpectedly.
+  /// Without this, the dashboard would show "Bağlı" forever after a BLE drop.
+  void _onBleConnectionChanged() {
+    if (!_bleService.isConnected.value) {
+      final updated = gateways.value.map((g) {
+        return g.isConnected
+            ? g.copyWith(
+                status: GatewayStatus.disconnected,
+                clearConnectedAt: true,
+                lastSeen: DateTime.now(),
+              )
+            : g;
+      }).toList();
+      gateways.value = updated;
+    }
+  }
 
   /// Load persisted gateways from SharedPreferences.
   /// Safe to call multiple times (idempotent). Must be awaited so the list
@@ -24,6 +51,9 @@ class GatewayService {
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
+
+    // Keep gateway statuses in sync with real BLE connection state
+    _bleService.isConnected.addListener(_onBleConnectionChanged);
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -51,10 +81,21 @@ class GatewayService {
     }
   }
 
-  /// Helper to try connecting once when app starts
+  /// Helper to try connecting once when app starts.
+  /// Skips the attempt if BLE permissions have not been granted yet
+  /// (e.g. first launch) to avoid showing a spurious "Hata" status.
   Future<void> _autoConnectOnStartup(String id) async {
     // Wait a bit for the app to settle
     await Future.delayed(const Duration(seconds: 2));
+
+    // Don't attempt if BLE permissions haven't been granted yet
+    final scanGranted = await Permission.bluetoothScan.isGranted;
+    final connectGranted = await Permission.bluetoothConnect.isGranted;
+    if (!scanGranted || !connectGranted) {
+      debugPrint('GatewayService: skipping auto-reconnect — BLE permissions not granted');
+      return;
+    }
+
     if (!_bleService.isConnected.value) {
       debugPrint('GatewayService: Attempting REQ-GW-05 auto-reconnect to $id');
       await connectToGateway(id);
@@ -80,6 +121,7 @@ class GatewayService {
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
@@ -107,6 +149,7 @@ class GatewayService {
       street: street?.trim().isEmpty == true ? null : street?.trim(),
       buildingNumber: buildingNumber?.trim().isEmpty == true ? null : buildingNumber?.trim(),
       doorNumber: doorNumber?.trim().isEmpty == true ? null : doorNumber?.trim(),
+      neighborhood: neighborhood?.trim().isEmpty == true ? null : neighborhood?.trim(),
       district: district?.trim().isEmpty == true ? null : district?.trim(),
       city: city?.trim().isEmpty == true ? null : city?.trim(),
       postalCode: postalCode?.trim().isEmpty == true ? null : postalCode?.trim(),
@@ -169,6 +212,20 @@ class GatewayService {
     }
   }
 
+  // Update the count of registered mobile devices on a gateway
+  void updateGatewayDeviceCount(String gatewayId, int count) {
+    final index = gateways.value.indexWhere((g) => g.id == gatewayId);
+    if (index != -1) {
+      final updated = gateways.value[index].copyWith(
+        connectedDeviceCount: count,
+      );
+      final newList = List<Gateway>.from(gateways.value);
+      newList[index] = updated;
+      gateways.value = newList;
+      _saveGateways();
+    }
+  }
+
   // Update gateway signal strength
   void updateGatewaySignal(String gatewayId, int signalStrength) {
     final index = gateways.value.indexWhere((g) => g.id == gatewayId);
@@ -209,6 +266,24 @@ class GatewayService {
         newList[index] = updated;
         gateways.value = newList;
       }
+
+      // Step 3: Trigger a periodic location check if it's been 6 months.
+      // The actual GPS fetch + comparison is done in the UI layer (DashboardPage)
+      // so it can show a proper dialog without needing a BuildContext here.
+      _triggerLocationCheckIfDue(gatewayId);
+
+      // Step 4: Register this phone with a stable ID (idempotent on the ESP32).
+      // Uses a stable random ID stored in SharedPreferences so repeated connects
+      // and app reinstalls do not create duplicate registrations.
+      final stableId = await DevicePasswordService().getOrCreateStableDeviceId();
+      await _bleService.registerDevice(stableId);
+
+      // Step 4: Query how many mobile devices are registered on this gateway.
+      // Only devices registered to THIS gateway count — not nearby devices on others.
+      final deviceCount = await _bleService.queryDeviceCount();
+      if (deviceCount != null) {
+        updateGatewayDeviceCount(gatewayId, deviceCount);
+      }
     } catch (e) {
       debugPrint('GatewayService: Connection failed — $e');
       updateGatewayStatus(gatewayId, GatewayStatus.error);
@@ -225,7 +300,7 @@ class GatewayService {
       if (index != -1) {
         final updated = gateways.value[index].copyWith(
           status: GatewayStatus.disconnected,
-          connectedAt: null,
+          clearConnectedAt: true,
           lastSeen: DateTime.now(),
         );
         final newList = List<Gateway>.from(gateways.value);
@@ -294,8 +369,46 @@ class GatewayService {
     // TODO: Remove from local storage
   }
 
+  /// Signals the UI to perform a location check if the interval has elapsed.
+  void _triggerLocationCheckIfDue(String gatewayId) {
+    final gateway = getGateway(gatewayId);
+    if (gateway == null) return;
+
+    // Only check gateways that have stored coordinates to compare against
+    if (gateway.latitude == null || gateway.longitude == null) return;
+
+    final last = gateway.lastLocationCheckAt;
+    final isDue = last == null ||
+        DateTime.now().difference(last).inDays >= _locationCheckIntervalDays;
+
+    if (isDue) {
+      locationCheckNeeded.value = gatewayId;
+    }
+  }
+
+  /// Called by the UI after performing the location check (pass or fail).
+  /// Records today as the last check date so the interval resets.
+  void markLocationChecked(String gatewayId) {
+    final index = gateways.value.indexWhere((g) => g.id == gatewayId);
+    if (index == -1) return;
+
+    final updated = gateways.value[index].copyWith(
+      lastLocationCheckAt: DateTime.now(),
+    );
+    final newList = List<Gateway>.from(gateways.value);
+    newList[index] = updated;
+    gateways.value = newList;
+    _saveGateways();
+
+    // Clear the pending signal
+    if (locationCheckNeeded.value == gatewayId) {
+      locationCheckNeeded.value = null;
+    }
+  }
+
   void dispose() {
     gateways.dispose();
+    locationCheckNeeded.dispose();
   }
 }
 

@@ -56,6 +56,16 @@ class BleConstants {
   /// Tells the ESP32 to erase all settings and reboot
   static const String cmdFactoryReset = 'FACTORY_RESET';
 
+  /// Asks the ESP32 how many mobile devices are registered to it
+  static const String cmdGetDeviceCount = 'GET_DEVICE_COUNT';
+
+  /// Prefix for the device count response — full format: "DEVICE_COUNT_3"
+  static const String respDeviceCountPrefix = 'DEVICE_COUNT_';
+
+  /// Register this phone with a stable ID — full format: "REGISTER:<id>"
+  /// The ESP32 stores the ID in NVS (idempotent — re-registering same ID is a no-op).
+  static const String cmdRegisterPrefix = 'REGISTER:';
+
   // ── Timing Settings ─────────────────────────────────────────────
 
   /// Max MTU (message size) — we don't negotiate this right now
@@ -95,13 +105,13 @@ class BleConstants {
   /// Max messages a single phone may send per connection cycle in
   /// disaster mode.  After this many it disconnects so the next
   /// survivor can take a turn.
-  static const int maxMessagesPerDrain = 2;
+  static const int maxMessagesPerDrain = 3;
 
-  /// Maximum messages allowed in the queue.  Oldest messages are
-  /// dropped when new ones arrive beyond this limit.
-  static const int maxQueueSize = 3;
+  /// Maximum messages allowed in the queue.
+  /// Large enough to hold multiple SOS + triage payloads per household.
+  static const int maxQueueSize = 20;
 
   /// Minimum pause between drain cycles in disaster mode so one
   /// phone cannot monopolize the gateway.
-  static const Duration drainCooldown = Duration(seconds: 10);
+  static const Duration drainCooldown = Duration(seconds: 5);
 }

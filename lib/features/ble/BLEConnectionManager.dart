@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -75,6 +76,27 @@ class BleConnection extends GetxController {
   // When true, the gateway is released immediately after each send
   // so the next person in the building can connect faster.
   bool disasterMode = false;
+
+  // When the disaster screen is disposed while a drain is in progress,
+  // we can't flip disasterMode off immediately — it would leave the
+  // gateway held open. This flag defers the flip until the drain ends.
+  bool _pendingDisasterModeOff = false;
+
+  // ── Heartbeat & Auto-Reconnect ──
+  // Sends PING every 30s while connected. If ESP32 doesn't reply twice in
+  // a row, we know the connection is dead and trigger a silent reconnect.
+  Timer? _heartbeatTimer;
+  int _heartbeatFailCount = 0;
+  bool _pingInFlight = false;
+  bool _heartbeatAutoReconnecting = false;
+  // Set true when the USER explicitly disconnects so heartbeat doesn't
+  // try to reconnect on their behalf.
+  bool _intentionalDisconnect = false;
+
+  static const Duration _heartbeatInterval = Duration(seconds: 30);
+  static const Duration _pingTimeout = Duration(seconds: 5);
+  static const int _maxHeartbeatFails = 2;
+  static const int _maxAutoReconnectAttempts = 10;
 
   // ── Queue & Auto-Reconnect state ──
   // Remembers the last device so we can reconnect without scanning.
@@ -196,26 +218,31 @@ class BleConnection extends GetxController {
   /// This is used when the app starts or when sending a background message.
   Future<bool> connectById(String deviceId) async {
     if (isConnected.value && _device?.remoteId.str == deviceId) {
-      _resetAutoReleaseTimer(); // Stay connected if we're already there
+      await _resetAutoReleaseTimer(); // Stay connected if we're already there
       return true;
     }
 
     status.value = 'Otomatik bağlanılıyor…';
-    
+
     // 1. Quick targeted scan (only for 5 seconds)
     await FlutterBluePlus.stopScan();
-    
-    Completer<ScanResult?> foundC = Completer();
-    var sub = FlutterBluePlus.scanResults.listen((results) {
-      for (var r in results) {
-        if (r.device.remoteId.str == deviceId) {
-          if (!foundC.isCompleted) foundC.complete(r);
-        }
-      }
-    });
+
+    final Completer<ScanResult?> foundC = Completer();
+    StreamSubscription<List<ScanResult>>? sub;
 
     try {
+      // Start scan BEFORE attaching the listener so the stream's cached
+      // (stale) results from a previous scan are discarded first.
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+
+      sub = FlutterBluePlus.scanResults.listen((results) {
+        for (var r in results) {
+          if (r.device.remoteId.str == deviceId) {
+            if (!foundC.isCompleted) foundC.complete(r);
+          }
+        }
+      });
+
       final result = await foundC.future.timeout(const Duration(seconds: 6), onTimeout: () => null);
       await sub.cancel();
       await FlutterBluePlus.stopScan();
@@ -227,7 +254,8 @@ class BleConnection extends GetxController {
       status.value = 'Gateway bulunamadı';
       return false;
     } catch (e) {
-      await sub.cancel();
+      await sub?.cancel();
+      await FlutterBluePlus.stopScan().catchError((_) {});
       return false;
     }
   }
@@ -235,14 +263,31 @@ class BleConnection extends GetxController {
   /// Waits for NEED_ACTIVATION notification after connect.
   /// Returns true if device needs activation, false if timeout or already active.
   Future<bool> waitForActivationPrompt({
-    Duration timeout = const Duration(seconds: 2),
+    Duration timeout = const Duration(seconds: 5),
   }) async {
+    // Fast path: notification already received and flag set
+    if (needsActivation.value) {
+      debugPrint('[ACTIVATION] waitForActivationPrompt → fast path TRUE');
+      return true;
+    }
+
     final c = _activationPromptCompleter;
-    if (c == null) return false;
+    if (c == null) {
+      // Completer missing — notification may still be in flight, wait briefly
+      debugPrint('[ACTIVATION] waitForActivationPrompt → completer NULL, waiting 1500ms');
+      await Future.delayed(const Duration(milliseconds: 1500));
+      final result = needsActivation.value;
+      debugPrint('[ACTIVATION] waitForActivationPrompt → fallback result=$result');
+      return result;
+    }
     try {
-      return await c.future.timeout(timeout, onTimeout: () => false);
-    } catch (_) {
-      return false;
+      debugPrint('[ACTIVATION] waitForActivationPrompt → waiting on completer (${timeout.inSeconds}s timeout)');
+      final result = await c.future.timeout(timeout, onTimeout: () => needsActivation.value);
+      debugPrint('[ACTIVATION] waitForActivationPrompt → completer result=$result');
+      return result;
+    } catch (e) {
+      debugPrint('[ACTIVATION] waitForActivationPrompt → error: $e, needsActivation=${needsActivation.value}');
+      return needsActivation.value;
     } finally {
       _activationPromptCompleter = null;
     }
@@ -255,6 +300,14 @@ class BleConnection extends GetxController {
   Future<void> connect(ScanResult r) async {
     _connectInProgress = true;
     _autoReleaseTimer?.cancel();
+
+    // ── Clean activation state from any previous connection ──
+    needsActivation.value = false;
+    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      _activationPromptCompleter!.complete(false);
+    }
+    _activationPromptCompleter = null;
+    debugPrint('[ACTIVATION] connect() — activation state reset');
 
     try {
       // Step 1: Disconnect from any previous device first
@@ -351,9 +404,11 @@ class BleConnection extends GetxController {
       isAuthenticated.value = true;
       status.value = 'Connected & ready';
       _lastDeviceId = r.device.remoteId.str;
-      
+      _intentionalDisconnect = false;
+
       // Start the timer to free the gateway if we don't do anything
       _resetAutoReleaseTimer();
+      _startHeartbeat();
     } catch (e) {
       status.value = 'Connection error: $e';
       await disconnect();
@@ -407,7 +462,7 @@ class BleConnection extends GetxController {
     // Connected — send immediately
     messages.add('ME: $text');
     final response = await _writeAndWaitResponse(text);
-    _resetAutoReleaseTimer();
+    await _resetAutoReleaseTimer();
 
     if (response == null) {
       messages.add('[System] No response (timeout)');
@@ -590,9 +645,13 @@ class BleConnection extends GetxController {
   // ═══════════════════════════════════════════════════════════════════════
 
   Future<void> disconnect() async {
-    // Tell the timer to stop
+    // Mark as intentional so heartbeat auto-reconnect doesn't fire
+    _intentionalDisconnect = true;
+
+    // Tell the timers to stop
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
+    _stopHeartbeat();
 
     // Stop all listeners first
     _cancelSubscriptions();
@@ -610,7 +669,9 @@ class BleConnection extends GetxController {
     isConnected.value = false;
     isAuthenticated.value = false;
     needsActivation.value = false;
-    _activationPromptCompleter?.complete(false);
+    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      _activationPromptCompleter!.complete(false);
+    }
     _activationPromptCompleter = null;
     status.value = 'Disconnected';
   }
@@ -640,7 +701,7 @@ class BleConnection extends GetxController {
     final waitTimeout = timeout ?? BleConstants.responseTimeout;
 
     // Write the text as UTF-8 bytes
-    await _rx!.write(utf8.encode(text), withoutResponse: true);
+    await _rx!.write(utf8.encode(text), withoutResponse: false);
 
     try {
       // Wait for the ESP32's response
@@ -664,15 +725,20 @@ class BleConnection extends GetxController {
   /// Called automatically whenever the ESP32 sends us a notification.
   /// This is how we receive responses after writing.
   void _onNotification(List<int> data) {
-    final msg = utf8.decode(data, allowMalformed: true).trim();
+    final msg = utf8.decode(data, allowMalformed: true).replaceAll('\x00', '').trim();
     if (msg.isEmpty) return;
 
+    debugPrint('[NOTIFY] Received: "$msg" (${data.length} bytes, raw=$data)');
+
     // Unsolicited activation prompt from ESP32 — set flag and complete waiter
-    if (msg == BleConstants.respNeedActivation ||
-        msg.contains(BleConstants.respNeedActivation)) {
+    if (msg == BleConstants.respNeedActivation) {
+      debugPrint('[ACTIVATION] NEED_ACTIVATION received — setting flag & completing completer');
       needsActivation.value = true;
       if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
         _activationPromptCompleter!.complete(true);
+        debugPrint('[ACTIVATION] Completer completed with TRUE');
+      } else {
+        debugPrint('[ACTIVATION] Completer was ${_activationPromptCompleter == null ? "NULL" : "already completed"}');
       }
       messages.add('[System] Cihaz aktivasyon bekliyor');
       return;
@@ -690,6 +756,7 @@ class BleConnection extends GetxController {
   void _onUnexpectedDisconnect() {
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
+    _stopHeartbeat();
     _cancelSubscriptions(
       delayResponseCancel: _isWaitingForActivationResponse,
     );
@@ -701,7 +768,9 @@ class BleConnection extends GetxController {
     isConnected.value = false;
     isAuthenticated.value = false;
     needsActivation.value = false;
-    _activationPromptCompleter?.complete(false);
+    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      _activationPromptCompleter!.complete(false);
+    }
     _activationPromptCompleter = null;
     status.value = 'Disconnected (unexpected)';
   }
@@ -722,6 +791,7 @@ class BleConnection extends GetxController {
     _scanSub = null;
 
     _autoReleaseTimer?.cancel();
+    _heartbeatTimer?.cancel();
 
     if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
       if (delayResponseCancel) {
@@ -822,18 +892,31 @@ class BleConnection extends GetxController {
         sent++;
 
         if (response == null) {
-          messages.add('[System] No response for queued message');
+          // Write timed out — restore message at front of queue so it
+          // is the first thing retried on the next connection.
+          _messageQueue.insert(0, msg);
+          _persistQueue();
+          messages.add('[System] Gönderim başarısız — mesaj yeniden kuyruğa alındı');
+          break; // Stop this drain cycle; reconnect will retry
         } else if (response != BleConstants.respMsgOk) {
           messages.add('ESP32: $response');
         }
       }
 
       // Release the gateway so the next person can connect
-      _resetAutoReleaseTimer();
+      await _resetAutoReleaseTimer();
     } catch (e) {
       messages.add('[System] Queue send error: $e');
     } finally {
       _isDrainingQueue = false;
+
+      // Apply deferred disaster-mode deactivation (set when screen disposed
+      // mid-drain so we didn't cut off the auto-release behaviour).
+      if (_pendingDisasterModeOff) {
+        disasterMode = false;
+        _pendingDisasterModeOff = false;
+      }
+
       // If new messages were added while we were draining, start again
       // (with cooldown in disaster mode so we don't hog the gateway)
       if (_messageQueue.isNotEmpty && _lastDeviceId != null) {
@@ -902,17 +985,23 @@ class BleConnection extends GetxController {
 
       if (_rx == null || _tx == null) throw 'Characteristics not found';
 
+      // Set up activation prompt completer (same as connect())
+      _activationPromptCompleter = Completer<bool>();
+
       _notifySub?.cancel();
       _notifySub = _tx!.onValueReceived.listen(_onNotification);
 
       await _tx!.setNotifyValue(true);
       await Future.delayed(BleConstants.notifySetupDelay);
+      await Future.delayed(const Duration(milliseconds: 300));
 
       if (!_device!.isConnected) throw 'Connection dropped during setup';
 
       isConnected.value = true;
       isAuthenticated.value = true;
       status.value = 'Reconnected';
+      _intentionalDisconnect = false;
+      _startHeartbeat();
     } catch (e) {
       await disconnect();
     } finally {
@@ -970,13 +1059,172 @@ class BleConnection extends GetxController {
   ///   logic that lets 10+ people take turns on one ESP32.
   /// - **Normal mode**: no auto-disconnect. The user stays connected until
   ///   they leave the screen or the connection drops naturally.
-  void _resetAutoReleaseTimer() {
+  Future<void> _resetAutoReleaseTimer() async {
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
 
     if (disasterMode && isConnected.value) {
-      print('[BLE] Disaster mode — releasing Gateway immediately');
-      disconnect();
+      await disconnect();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  DEVICE COUNT — Query how many mobile devices are registered on the ESP32
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Safely deactivates disaster mode.
+  /// If a drain is in progress, defers the flag flip until the drain
+  /// finishes so the auto-release-after-send behaviour isn't cut off.
+  void deactivateDisasterMode() {
+    if (_isDrainingQueue) {
+      _pendingDisasterModeOff = true;
+    } else {
+      disasterMode = false;
+    }
+  }
+
+  /// Sends a binary payload immediately when connected, or encodes it as a
+  /// hex string and pushes it through the text queue when disconnected.
+  ///
+  /// This gives the triage payload the same persistent, retrying delivery
+  /// guarantee that text SOS messages already have.
+  /// The ESP32 receives "BIN:<hex>" as an unknown command and replies MSG_OK,
+  /// which is sufficient for the current protocol version.
+  Future<void> sendBinaryQueued(Uint8List payload) async {
+    if (payload.isEmpty) return;
+    if (_lastDeviceId == null) {
+      throw StateError('No gateway available — set lastDeviceId first');
+    }
+
+    // If connected, try raw binary first (fastest path)
+    if (isConnected.value && _rx != null) {
+      final success = await sendHexPayload(payload);
+      if (success) return;
+      // Direct send failed — fall through to queue
+    }
+
+    // Encode as hex and queue with full retry/persistence support
+    final hex = payload.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    await send('BIN:$hex');
+  }
+
+  /// Registers this phone with the ESP32 using a stable app-provided ID.
+  /// The ESP32 stores it in NVS — idempotent, so re-sending same ID is a no-op.
+  /// Returns true if the ESP32 confirmed with MSG_OK.
+  Future<bool> registerDevice(String stableId) async {
+    if (_rx == null || !isConnected.value) return false;
+    final response = await _writeAndWaitResponse(
+      '${BleConstants.cmdRegisterPrefix}$stableId',
+    );
+    return response == BleConstants.respMsgOk;
+  }
+
+  /// Sends GET_DEVICE_COUNT to the ESP32 and returns the parsed count.
+  /// Returns null if not connected or the response is unexpected.
+  Future<int?> queryDeviceCount() async {
+    if (_rx == null || !isConnected.value) return null;
+
+    final response = await _writeAndWaitResponse(BleConstants.cmdGetDeviceCount);
+    if (response == null) return null;
+
+    if (response.startsWith(BleConstants.respDeviceCountPrefix)) {
+      return int.tryParse(
+        response.substring(BleConstants.respDeviceCountPrefix.length),
+      );
+    }
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  //  HEARTBEAT — Detect silent BLE drops and reconnect automatically
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /// Starts a periodic PING→PONG probe.
+  /// Skips ticks when a queue drain is in progress to avoid response collisions.
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatFailCount = 0;
+    _pingInFlight = false;
+
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) async {
+      // Not connected — stop the timer, nothing to probe.
+      if (!isConnected.value) {
+        _stopHeartbeat();
+        return;
+      }
+
+      // Skip this tick — a drain or previous ping is still running.
+      if (_isDrainingQueue || _pingInFlight) return;
+
+      _pingInFlight = true;
+      try {
+        final response = await _writeAndWaitResponse('PING', timeout: _pingTimeout);
+        if (response == 'PONG') {
+          _heartbeatFailCount = 0; // connection is healthy
+          debugPrint('[Heartbeat] PONG received — connection healthy');
+        } else {
+          _heartbeatFailCount++;
+          debugPrint('[Heartbeat] No PONG (got: $response) — fail $_heartbeatFailCount/$_maxHeartbeatFails');
+          if (_heartbeatFailCount >= _maxHeartbeatFails) {
+            _stopHeartbeat();
+            _onUnexpectedDisconnect();
+            if (!_intentionalDisconnect && _lastDeviceId != null) {
+              _autoReconnectAfterHeartbeatFailure();
+            }
+          }
+        }
+      } finally {
+        _pingInFlight = false;
+      }
+    });
+  }
+
+  void _stopHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    _heartbeatFailCount = 0;
+    _pingInFlight = false;
+  }
+
+  /// Silently tries to reconnect after heartbeat detects a dead connection.
+  /// Uses exponential backoff (1s → 2s → 4s → … → 30s max) with jitter.
+  /// Stops if the user intentionally disconnects or reconnect succeeds.
+  Future<void> _autoReconnectAfterHeartbeatFailure() async {
+    if (_heartbeatAutoReconnecting) return;
+    _heartbeatAutoReconnecting = true;
+
+    final rng = Random();
+    final deviceId = _lastDeviceId!;
+
+    try {
+      for (int attempt = 0; attempt < _maxAutoReconnectAttempts; attempt++) {
+        if (isConnected.value || _intentionalDisconnect) break;
+
+        // Backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped) + jitter
+        final baseMs = attempt == 0 ? 1000 : (2000 * (1 << (attempt - 1))).clamp(0, 30000);
+        final jitterMs = rng.nextInt(1000);
+        await Future.delayed(Duration(milliseconds: baseMs + jitterMs));
+
+        if (_intentionalDisconnect) break;
+
+        status.value = 'Otomatik yeniden bağlanılıyor (${attempt + 1}/$_maxAutoReconnectAttempts)…';
+        debugPrint('[Heartbeat] Auto-reconnect attempt ${attempt + 1}/$_maxAutoReconnectAttempts');
+
+        // Fast path first, then full scan fallback
+        await _directReconnect(deviceId);
+        if (!isConnected.value) await connectById(deviceId);
+      }
+
+      if (isConnected.value) {
+        debugPrint('[Heartbeat] Auto-reconnect succeeded');
+        _startHeartbeat();
+        if (_messageQueue.isNotEmpty) _reconnectAndDrainQueue();
+      } else if (!_intentionalDisconnect) {
+        status.value = 'Bağlantı kurulamadı — lütfen manuel bağlanın';
+        debugPrint('[Heartbeat] Auto-reconnect exhausted all attempts');
+      }
+    } finally {
+      _heartbeatAutoReconnecting = false;
     }
   }
 

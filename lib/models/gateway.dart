@@ -9,17 +9,20 @@ class Gateway {
   final DateTime? connectedAt;
   final int messagesSent;
   final int messagesReceived;
+  final int? connectedDeviceCount; // number of mobile devices registered on this gateway
   
   // Address fields
   final BuildingType? buildingType;
   final String? street;
   final String? buildingNumber;
   final String? doorNumber;
+  final String? neighborhood;
   final String? district;
   final String? city;
   final String? postalCode;
   final double? latitude;
   final double? longitude;
+  final DateTime? lastLocationCheckAt;
 
   Gateway({
     required this.id,
@@ -32,15 +35,18 @@ class Gateway {
     this.connectedAt,
     this.messagesSent = 0,
     this.messagesReceived = 0,
+    this.connectedDeviceCount,
     this.buildingType,
     this.street,
     this.buildingNumber,
     this.doorNumber,
+    this.neighborhood,
     this.district,
     this.city,
     this.postalCode,
     this.latitude,
     this.longitude,
+    this.lastLocationCheckAt,
   });
 
   bool get isConnected => status == GatewayStatus.connected;
@@ -59,15 +65,18 @@ class Gateway {
       'connectedAt': connectedAt?.toIso8601String(),
       'messagesSent': messagesSent,
       'messagesReceived': messagesReceived,
+      'connectedDeviceCount': connectedDeviceCount,
       'buildingType': buildingType?.name,
       'street': street,
       'buildingNumber': buildingNumber,
       'doorNumber': doorNumber,
+      'neighborhood': neighborhood,
       'district': district,
       'city': city,
       'postalCode': postalCode,
       'latitude': latitude,
       'longitude': longitude,
+      'lastLocationCheckAt': lastLocationCheckAt?.toIso8601String(),
     };
   }
 
@@ -90,6 +99,7 @@ class Gateway {
           : null,
       messagesSent: (json['messagesSent'] as num?)?.toInt() ?? 0,
       messagesReceived: (json['messagesReceived'] as num?)?.toInt() ?? 0,
+      connectedDeviceCount: (json['connectedDeviceCount'] as num?)?.toInt(),
       buildingType: json['buildingType'] != null
           ? BuildingType.values.firstWhere(
               (e) => e.name == json['buildingType'],
@@ -99,11 +109,15 @@ class Gateway {
       street: json['street'] as String?,
       buildingNumber: json['buildingNumber'] as String?,
       doorNumber: json['doorNumber'] as String?,
+      neighborhood: json['neighborhood'] as String?,
       district: json['district'] as String?,
       city: json['city'] as String?,
       postalCode: json['postalCode'] as String?,
       latitude: (json['latitude'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble(),
+      lastLocationCheckAt: json['lastLocationCheckAt'] != null
+          ? DateTime.tryParse(json['lastLocationCheckAt'] as String)
+          : null,
     );
   }
 
@@ -116,17 +130,21 @@ class Gateway {
     int? signalStrength,
     DateTime? lastSeen,
     DateTime? connectedAt,
+    bool clearConnectedAt = false,
     int? messagesSent,
     int? messagesReceived,
+    int? connectedDeviceCount,
     BuildingType? buildingType,
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
     double? latitude,
     double? longitude,
+    DateTime? lastLocationCheckAt,
   }) {
     return Gateway(
       id: id ?? this.id,
@@ -136,18 +154,21 @@ class Gateway {
       batteryLevel: batteryLevel ?? this.batteryLevel,
       signalStrength: signalStrength ?? this.signalStrength,
       lastSeen: lastSeen ?? this.lastSeen,
-      connectedAt: connectedAt ?? this.connectedAt,
+      connectedAt: clearConnectedAt ? null : (connectedAt ?? this.connectedAt),
       messagesSent: messagesSent ?? this.messagesSent,
       messagesReceived: messagesReceived ?? this.messagesReceived,
+      connectedDeviceCount: connectedDeviceCount ?? this.connectedDeviceCount,
       buildingType: buildingType ?? this.buildingType,
       street: street ?? this.street,
       buildingNumber: buildingNumber ?? this.buildingNumber,
       doorNumber: doorNumber ?? this.doorNumber,
+      neighborhood: neighborhood ?? this.neighborhood,
       district: district ?? this.district,
       city: city ?? this.city,
       postalCode: postalCode ?? this.postalCode,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      lastLocationCheckAt: lastLocationCheckAt ?? this.lastLocationCheckAt,
     );
   }
   
@@ -178,6 +199,7 @@ class Gateway {
     if (doorNumber != null && doorNumber!.isNotEmpty) {
       parts.add('Daire: $doorNumber');
     }
+    if (neighborhood != null && neighborhood!.isNotEmpty) parts.add(neighborhood!);
     if (district != null && district!.isNotEmpty) parts.add(district!);
     if (city != null && city!.isNotEmpty) parts.add(city!);
     if (postalCode != null && postalCode!.isNotEmpty) {

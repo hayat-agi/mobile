@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import '../../core/routing/app_router.dart';
 import '../../core/widgets/app_scaffold.dart';
 import '../../core/widgets/stat_card.dart';
@@ -32,11 +33,16 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
+    _gatewayService.locationCheckNeeded.addListener(_onLocationCheckNeeded);
     // Deferred to post-frame so that ValueListenableBuilder is fully mounted
     // before any notification fires. This prevents the "setState() called
     // during build" crash when initialize() mutates the gateways notifier.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initAndAutoReconnect();
+      // Handle the case where locationCheckNeeded was set before we listened
+      if (_gatewayService.locationCheckNeeded.value != null) {
+        _onLocationCheckNeeded();
+      }
     });
   }
 
@@ -50,8 +56,120 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   void dispose() {
+    _gatewayService.locationCheckNeeded.removeListener(_onLocationCheckNeeded);
     _searchController.dispose();
     super.dispose();
+  }
+
+  // ─── Periodic location check ──────────────────────────────────────
+
+  void _onLocationCheckNeeded() {
+    final gatewayId = _gatewayService.locationCheckNeeded.value;
+    if (gatewayId == null || !mounted) return;
+    // Small delay so the connection UI settles first
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) _performLocationCheck(gatewayId);
+    });
+  }
+
+  /// Fetches current GPS position and compares it to the gateway's stored
+  /// coordinates. If the device has moved more than 150 m, prompts the user
+  /// to review the address. Always records the check date when done.
+  Future<void> _performLocationCheck(String gatewayId) async {
+    final gateway = _gatewayService.getGateway(gatewayId);
+    if (gateway == null || gateway.latitude == null || gateway.longitude == null) {
+      _gatewayService.markLocationChecked(gatewayId);
+      return;
+    }
+
+    // Need location permission — skip silently if denied
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      _gatewayService.markLocationChecked(gatewayId);
+      return;
+    }
+
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      _gatewayService.markLocationChecked(gatewayId);
+      return;
+    }
+
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+
+      final distanceMeters = Geolocator.distanceBetween(
+        gateway.latitude!,
+        gateway.longitude!,
+        position.latitude,
+        position.longitude,
+      );
+
+      debugPrint('[LocationCheck] gateway="${gateway.name}" '
+          'stored=(${gateway.latitude}, ${gateway.longitude}) '
+          'current=(${position.latitude}, ${position.longitude}) '
+          'distance=${distanceMeters.toStringAsFixed(1)}m');
+
+      // Mark checked regardless of outcome so we don't nag on every connect
+      _gatewayService.markLocationChecked(gatewayId);
+
+      // Only alert if the device appears to have moved significantly
+      if (distanceMeters > 150 && mounted) {
+        _showLocationChangedDialog(gateway, distanceMeters.round());
+      }
+    } catch (e) {
+      debugPrint('[LocationCheck] GPS failed: $e');
+      // GPS failed — record the check so we don't retry until next interval
+      _gatewayService.markLocationChecked(gatewayId);
+    }
+  }
+
+  void _showLocationChangedDialog(Gateway gateway, int distanceMeters) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.location_off, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Konum Değişikliği'),
+          ],
+        ),
+        content: Text(
+          '"${gateway.name}" cihazının konumu yaklaşık $distanceMeters metre '
+          'değişmiş görünüyor.\n\n'
+          'Deprem senaryosunda kurtarma ekiplerinin doğru adrese ulaşabilmesi '
+          'için adres bilgilerini güncellemenizi öneririz.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Daha Sonra'),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.edit_location_alt, size: 18),
+            label: const Text('Detaylara Git'),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pushNamed(
+                context,
+                AppRouter.gatewayDetails,
+                arguments: gateway.id,
+              );
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _addGateway(
@@ -61,9 +179,12 @@ class _DashboardPageState extends State<DashboardPage> {
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
+    double? latitude,
+    double? longitude,
   ) async {
     final finalName = name ??
         'Gateway ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}';
@@ -75,9 +196,12 @@ class _DashboardPageState extends State<DashboardPage> {
       street: street,
       buildingNumber: buildingNumber,
       doorNumber: doorNumber,
+      neighborhood: neighborhood,
       district: district,
       city: city,
       postalCode: postalCode,
+      latitude: latitude,
+      longitude: longitude,
     );
 
     if (mounted) {
@@ -524,6 +648,15 @@ class _DashboardPageState extends State<DashboardPage> {
                       ? AppColors.success
                       : AppColors.warning,
                 ),
+              if (gateway.connectedDeviceCount != null) ...[
+                const SizedBox(width: AppSpacing.sm),
+                _buildMetricChip(
+                  context: context,
+                  icon: Icons.phone_android,
+                  label: '${gateway.connectedDeviceCount} cihaz',
+                  color: AppColors.primary,
+                ),
+              ],
               const Spacer(),
               // Last Seen
               if (gateway.lastSeen != null)

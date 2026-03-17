@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DevicePasswordService {
@@ -88,6 +89,48 @@ class DevicePasswordService {
   Future<void> clearLastConnectedDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_lastConnectedDeviceKey);
+  }
+
+  // ── Activation state ─────────────────────────────────────────────
+
+  static const String _activatedPrefix = 'device_activated_';
+
+  /// Returns true if this device has been successfully activated via this app.
+  Future<bool> isActivated(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool('$_activatedPrefix$deviceId') ?? false;
+  }
+
+  /// Mark this device as successfully activated.
+  Future<void> markActivated(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('$_activatedPrefix$deviceId', true);
+  }
+
+  /// Clear the activated flag (e.g. after a factory reset).
+  Future<void> clearActivated(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_activatedPrefix$deviceId');
+  }
+
+  // ── Stable Phone Identity ─────────────────────────────────────────────
+
+  static const String _stableDeviceIdKey = 'stable_phone_id';
+
+  /// Returns a stable random ID for this phone installation.
+  /// Generated once and persisted in SharedPreferences.
+  /// Used to register with the ESP32 so the count doesn't grow on reconnects.
+  Future<String> getOrCreateStableDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(_stableDeviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    final rng = Random.secure();
+    final id = List.generate(16, (_) => rng.nextInt(256))
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    await prefs.setString(_stableDeviceIdKey, id);
+    return id;
   }
 }
 

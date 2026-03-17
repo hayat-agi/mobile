@@ -17,6 +17,7 @@ import '../../core/theme/app_typography.dart';
 import '../ble/ble_service.dart';
 import '../ble/BLEConstants.dart';
 import '../ble/BLEConnectionManager.dart';
+import '../ble/activation_dialog.dart';
 
 class GatewayDetailsPage extends StatefulWidget {
   final String gatewayId;
@@ -147,13 +148,30 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         );
       }
 
-      // ── Connect (no provisioning needed) ──
+      // ── Connect ──
       await _bleService.connect(deviceResult);
 
       if (!_bleService.isConnected.value) {
         throw Exception(
           'Bağlantı başarısız: ${_bleService.bleConnection.status.value}',
         );
+      }
+
+      // ── Check if device needs activation (factory reset or new flash) ──
+      final activationNeeded = await _bleService.waitForActivationPrompt();
+      if (activationNeeded && mounted) {
+        final activated = await showActivationDialog(context);
+        if (!mounted) return;
+        if (!activated) {
+          await _bleService.disconnect();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Cihaz aktive edilmedi — bağlantı kesildi'),
+              backgroundColor: AppColors.warning,
+            ),
+          );
+          return;
+        }
       }
 
       _gatewayService.updateGatewayStatus(gateway.id, GatewayStatus.connected);
@@ -163,6 +181,12 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
       final realId = deviceResult.device.remoteId.toString();
       if (gateway.id != realId) {
         _gatewayService.updateGatewayBleId(gateway.id, realId);
+      }
+
+      // Query how many mobile devices are registered to this gateway.
+      final deviceCount = await _bleService.queryDeviceCount();
+      if (deviceCount != null) {
+        _gatewayService.updateGatewayDeviceCount(realId, deviceCount);
       }
 
       if (mounted) {
@@ -294,7 +318,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         builder: (context, gateways, _) {
           final updatedGateway = _gatewayService.getGateway(widget.gatewayId);
           if (updatedGateway == null) {
-            Navigator.pop(context);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) Navigator.of(context).pop();
+            });
             return const SizedBox.shrink();
           }
 
@@ -649,6 +675,21 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
               icon: Icons.inbox,
             ),
           ),
+          if (gateway.connectedDeviceCount != null) ...[
+            Container(
+              width: 1,
+              height: 40,
+              color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+            ),
+            Expanded(
+              child: _buildStatItem(
+                context: context,
+                label: 'Kayıtlı Cihaz',
+                value: gateway.connectedDeviceCount.toString(),
+                icon: Icons.phone_android,
+              ),
+            ),
+          ],
         ],
       ),
     );

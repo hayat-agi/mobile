@@ -227,24 +227,13 @@ class DisasterController extends GetxController {
   // ─── Send ──────────────────────────────────────────────────────────
 
     /// Encode the current state and send via BLE.
-  /// Returns false if debounced, not connected, or send failed.
+  /// If connected, sends immediately. If not connected, queues the payload
+  /// for automatic delivery when the connection is restored — never drops.
+  /// Returns false only if no gateway has ever been added.
   Future<bool> sendStatus() async {
     if (selectedStatus.value == null) return false;
     if (!canSend.value) return false;
     if (isSending.value) return false;
-
-    // REQ-GW-05: Auto-connect if disconnected
-    if (!isConnected) {
-      final savedGateways = GatewayService().gateways.value;
-      if (savedGateways.isNotEmpty) {
-        isSending.value = true;
-        final reconnected = await _bleService.autoReconnect(savedGateways.first.id);
-        isSending.value = false;
-        if (!reconnected) return false;
-      } else {
-        return false;
-      }
-    }
 
     isSending.value = true;
 
@@ -252,14 +241,22 @@ class DisasterController extends GetxController {
       final payload = buildPayload();
       if (payload.isEmpty) return false;
 
-      final success = await _bleService.sendHexPayload(payload);
-      lastSendSuccess.value = success;
-
-      if (success) {
-        _startDebounce();
+      // Ensure the queue knows which gateway to reconnect to even if
+      // this phone has never successfully connected in this session.
+      final savedGateways = GatewayService().gateways.value;
+      if (savedGateways.isEmpty && !isConnected) {
+        return false; // No gateway ever added — nothing to queue for
+      }
+      if (savedGateways.isNotEmpty) {
+        _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
       }
 
-      return success;
+      // sendBinaryQueued: sends raw bytes immediately when connected,
+      // or encodes as hex and queues with full retry when disconnected.
+      await _bleService.sendBinaryQueued(payload);
+      lastSendSuccess.value = true;
+      _startDebounce();
+      return true;
     } catch (e) {
       lastSendSuccess.value = false;
       return false;
@@ -311,11 +308,21 @@ class DisasterController extends GetxController {
 
   // ─── Manual text message ───────────────────────────────────────────
 
-  /// Send a free-text message via BLE. Returns true once the message is
-  /// accepted (either sent immediately or queued for retry).
-  /// The BLE queue system handles reconnection + retry transparently.
+  /// Send a free-text message via BLE.
+  /// Returns true if the message was sent or successfully queued for retry.
+  /// Returns false only if no gateway has ever been added to the app.
   Future<bool> sendManualMessage(String text) async {
     if (text.trim().isEmpty) return false;
+
+    final savedGateways = GatewayService().gateways.value;
+    if (savedGateways.isEmpty && !isConnected) {
+      return false; // No gateway to send to or queue for
+    }
+
+    // Ensure queue knows which gateway to reconnect to
+    if (savedGateways.isNotEmpty) {
+      _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
+    }
 
     try {
       await _bleService.sendMessage(text.trim());

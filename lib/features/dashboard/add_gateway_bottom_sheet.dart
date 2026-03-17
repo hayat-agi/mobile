@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../core/widgets/secondary_button.dart';
 import '../../core/widgets/section_header.dart';
@@ -22,9 +24,12 @@ class AddGatewayBottomSheet extends StatefulWidget {
     String? street,
     String? buildingNumber,
     String? doorNumber,
+    String? neighborhood,
     String? district,
     String? city,
     String? postalCode,
+    double? latitude,
+    double? longitude,
   ) onAdd;
 
   const AddGatewayBottomSheet({
@@ -43,6 +48,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   final TextEditingController _streetController = TextEditingController();
   final TextEditingController _buildingNumberController = TextEditingController();
   final TextEditingController _doorNumberController = TextEditingController();
+  final TextEditingController _neighborhoodController = TextEditingController();
   final TextEditingController _districtController = TextEditingController();
   final TextEditingController _cityController = TextEditingController();
   final TextEditingController _postalCodeController = TextEditingController();
@@ -50,6 +56,9 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   final BleService _bleService = BleService();
   BuildingType? _selectedBuildingType;
   bool _showBleScan = false;
+  bool _isSelectingDevice = false;
+  double? _latitude;
+  double? _longitude;
 
   @override
   void initState() {
@@ -72,6 +81,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
     _streetController.dispose();
     _buildingNumberController.dispose();
     _doorNumberController.dispose();
+    _neighborhoodController.dispose();
     _districtController.dispose();
     _cityController.dispose();
     _postalCodeController.dispose();
@@ -86,111 +96,136 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   }
 
   Future<void> _selectBleDevice(ScanResult result) async {
-    final deviceName = result.device.platformName.isNotEmpty
-        ? result.device.platformName
-        : result.advertisementData.advName;
-    final deviceId = result.device.remoteId.toString();
-    
-    // Show connecting dialog
-    if (!mounted) return;
-    
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: AppSpacing.md),
-            Text('Bağlanıyor...\n$deviceName'),
-          ],
-        ),
-      ),
-    );
-    
+    if (_isSelectingDevice) return;
+    _isSelectingDevice = true;
+
     try {
-      // Connect to the device — this handles everything automatically:
-      // service discovery, notifications, etc.
-      await _bleService.connect(result);
-      
+      final deviceName = result.device.platformName.isNotEmpty
+          ? result.device.platformName
+          : result.advertisementData.advName;
+      final deviceId = result.device.remoteId.toString();
+
+      // Show connecting dialog
       if (!mounted) return;
-      
-      // Check if connected
-      if (!_bleService.isConnected.value) {
-        Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Bağlantı başarısız: ${_bleService.status.value}'),
-            backgroundColor: AppColors.danger,
-            duration: const Duration(seconds: 3),
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: AppSpacing.md),
+              Text('Bağlanıyor...\n$deviceName'),
+            ],
           ),
-        );
-        return;
-      }
-      
-      // Close connecting dialog
-      Navigator.of(context).pop();
+        ),
+      );
 
-      // Make sure we're still connected after all that
-      if (!_bleService.isConnected.value || !mounted) {
-        await _bleService.disconnect();
-        return;
-      }
+      try {
+        // Connect to the device — this handles everything automatically:
+        // service discovery, notifications, etc.
+        await _bleService.connect(result);
 
-      // Wait for NEED_ACTIVATION via Completer — reliable, no polling
-      final activationNeeded = await _bleService.waitForActivationPrompt();
-
-      if (activationNeeded && mounted) {
-        final activated = await showActivationDialog(context);
         if (!mounted) return;
 
-        if (!activated) {
-          await _bleService.disconnect();
+        // Check if connected
+        if (!_bleService.isConnected.value) {
+          Navigator.of(context).pop();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Cihaz aktive edilmedi — bağlantı kesildi'),
-              backgroundColor: AppColors.warning,
+              content: Text('❌ Bağlantı başarısız: ${_bleService.status.value}'),
+              backgroundColor: AppColors.danger,
+              duration: const Duration(seconds: 3),
             ),
           );
           return;
         }
 
-        // Device activated — connection stays alive, no reboot
+        // Close connecting dialog
+        Navigator.of(context).pop();
+
+        // Make sure we're still connected after all that
+        if (!_bleService.isConnected.value || !mounted) {
+          await _bleService.disconnect();
+          return;
+        }
+
+        // Check if device needs activation.
+        // Primary: wait for NEED_ACTIVATION notification from ESP32 (handles factory-reset case).
+        // Fallback: if the notification is missed (timing issue), check local activation record.
+        debugPrint('[ADD_GW] Calling waitForActivationPrompt...');
+        final activationNeeded = await _bleService.waitForActivationPrompt();
+        debugPrint('[ADD_GW] activationNeeded=$activationNeeded, mounted=$mounted');
+
+        // The ESP32 is the source of truth.
+        // It only sends NEED_ACTIVATION when genuinely unactivated (NVS flag = false).
+        // If no NEED_ACTIVATION arrives within the timeout, the device is already
+        // activated — regardless of what the local app cache says.
+        // (The local cache is wiped on reinstall, which previously caused a false dialog.)
+        if (activationNeeded && mounted) {
+          debugPrint('[ADD_GW] Showing activation dialog...');
+          final activated = await showActivationDialog(context);
+          debugPrint('[ADD_GW] Activation dialog result: activated=$activated');
+          if (!mounted) return;
+
+          if (!activated) {
+            await _bleService.disconnect();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Cihaz aktive edilmedi — bağlantı kesildi'),
+                backgroundColor: AppColors.warning,
+              ),
+            );
+            return;
+          }
+
+          // Cache activation state locally (used for future reference only)
+          await DevicePasswordService().markActivated(deviceId);
+        }
+
+        // Bağlantı başarılı! Formu doldur ve cihaz bilgilerini kaydet
+        await _saveDeviceInfoAndFillForm(deviceId, deviceName);
+
+        // Close scan view
+        setState(() {
+          _showBleScan = false;
+        });
+
+        // Show success message
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$deviceName başarıyla bağlandı'),
+            backgroundColor: AppColors.success,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+
+        // Close connecting dialog if still open
+        try {
+          Navigator.of(context).pop();
+        } catch (_) {}
+
+        // Show error
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Bağlantı hatası: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        return; // Don't try GPS if connection failed
       }
 
-      // Bağlantı başarılı! Formu doldur ve cihaz bilgilerini kaydet
-      await _saveDeviceInfoAndFillForm(deviceId, deviceName);
-      
-      // Close scan view
-      setState(() {
-        _showBleScan = false;
-      });
-      
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$deviceName başarıyla bağlandı ve form dolduruldu'),
-          backgroundColor: AppColors.success,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      
-      // Close connecting dialog if still open
-      try {
-        Navigator.of(context).pop();
-      } catch (_) {}
-      
-      // Show error
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('❌ Bağlantı hatası: $e'),
-          backgroundColor: AppColors.danger,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      // GPS konumu al ve adres alanlarını doldur
+      // Bu kısım BLE try-catch'inin DIŞINDA — kendi hata yönetimi var
+      debugPrint('[Location] _fetchAndFillLocation() CALLED');
+      await _fetchAndFillLocation();
+    } finally {
+      _isSelectingDevice = false;
     }
   }
   
@@ -208,6 +243,262 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
     }
   }
   
+  /// Fetch GPS location and reverse geocode to fill address fields.
+  Future<void> _fetchAndFillLocation() async {
+    try {
+      // Check if location service is enabled — if not, prompt user to open settings
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          final shouldOpen = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Konum Servisi Kapalı'),
+              content: const Text(
+                'Adres bilgilerini otomatik doldurmak için konum servisini açmanız gerekiyor.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Geç'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Ayarları Aç'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpen == true) {
+            await Geolocator.openLocationSettings();
+            // Wait a moment for user to toggle settings and come back
+            await Future.delayed(const Duration(seconds: 2));
+            // Re-check
+            serviceEnabled = await Geolocator.isLocationServiceEnabled();
+            if (!serviceEnabled) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Text('⚠️ Konum hâlâ kapalı — adresi elle girin'),
+                    backgroundColor: AppColors.warning,
+                    duration: const Duration(seconds: 3),
+                  ),
+                );
+              }
+              return;
+            }
+          } else {
+            return;
+          }
+        } else {
+          return;
+        }
+      }
+
+      // Check and request permission
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('⚠️ Konum izni verilmedi — adresi elle girin'),
+                backgroundColor: AppColors.warning,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          final shouldOpen = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Konum İzni Gerekli'),
+              content: const Text(
+                'Konum izni kalıcı olarak reddedilmiş. Uygulama ayarlarından izni açmanız gerekiyor.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Geç'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Ayarları Aç'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldOpen == true) {
+            await Geolocator.openAppSettings();
+          }
+        }
+        return;
+      }
+
+      // Show loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: const [
+                SizedBox(
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                ),
+                SizedBox(width: 12),
+                Text('Konum alınıyor…'),
+              ],
+            ),
+            duration: const Duration(seconds: 15),
+            backgroundColor: AppColors.info,
+          ),
+        );
+      }
+
+      // Get current position
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+
+      _latitude = position.latitude;
+      _longitude = position.longitude;
+
+      debugPrint('[Location] GPS OK: ${position.latitude}, ${position.longitude}');
+
+      // Reverse geocode
+      try {
+        final placemarks = await placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+
+        if (placemarks.isNotEmpty && mounted) {
+          final place = placemarks.first;
+
+          // Debug: print all available placemark fields
+          // In Turkey: street=mahalle adı, thoroughfare=gerçek cadde/sokak, subLocality=mahalle
+          debugPrint('[Location] Placemark: '
+              'street=${place.street}, '
+              'thoroughfare=${place.thoroughfare}, '
+              'subThoroughfare=${place.subThoroughfare}, '
+              'subLocality=${place.subLocality}, '
+              'locality=${place.locality}, '
+              'subAdminArea=${place.subAdministrativeArea}, '
+              'adminArea=${place.administrativeArea}, '
+              'postalCode=${place.postalCode}');
+
+          setState(() {
+            // Sokak/Cadde: Türkiye'de place.street genellikle mahalle adını döner.
+            // place.thoroughfare gerçek cadde/sokak adını içerir.
+            if (_streetController.text.isEmpty) {
+              final street = place.thoroughfare ?? place.street;
+              if (street != null && street.isNotEmpty) {
+                _streetController.text = street;
+              }
+            }
+            // Bina No: subThoroughfare = kapı/bina numarası
+            if (_buildingNumberController.text.isEmpty) {
+              final buildingNo = place.subThoroughfare;
+              if (buildingNo != null && buildingNo.isNotEmpty) {
+                _buildingNumberController.text = buildingNo;
+              }
+            }
+            // Mahalle: subLocality = mahalle
+            if (_neighborhoodController.text.isEmpty) {
+              final neighborhood = place.subLocality;
+              if (neighborhood != null && neighborhood.isNotEmpty) {
+                _neighborhoodController.text = neighborhood;
+              }
+            }
+            // İlçe: subAdministrativeArea = ilçe (Türkiye'de doğru alan)
+            // locality = ilçe için fallback
+            if (_districtController.text.isEmpty) {
+              final district = place.subAdministrativeArea?.isNotEmpty == true
+                  ? place.subAdministrativeArea
+                  : place.locality;
+              if (district != null && district.isNotEmpty) {
+                _districtController.text = district;
+              }
+            }
+            // İl: administrativeArea = il (Türkiye'de doğru alan)
+            if (_cityController.text.isEmpty) {
+              final city = place.administrativeArea;
+              if (city != null && city.isNotEmpty) {
+                _cityController.text = city;
+              }
+            }
+            // Posta kodu
+            if (_postalCodeController.text.isEmpty) {
+              if (place.postalCode != null && place.postalCode!.isNotEmpty) {
+                _postalCodeController.text = place.postalCode!;
+              }
+            }
+          });
+
+          // Dismiss loading snackbar and show success
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('📍 Konum alındı — adres alanları dolduruldu'),
+                backgroundColor: AppColors.success,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        } else {
+          // No placemarks found
+          if (mounted) {
+            ScaffoldMessenger.of(context).hideCurrentSnackBar();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('📍 Koordinatlar alındı (${position.latitude.toStringAsFixed(4)}, '
+                    '${position.longitude.toStringAsFixed(4)}) — adres çevrilemedi'),
+                backgroundColor: AppColors.warning,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('[Location] Reverse geocoding failed: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('📍 GPS alındı ama adres çevrilemedi: $e'),
+              backgroundColor: AppColors.warning,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[Location] GPS error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Konum alınamadı: $e'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
 
   void _submit() {
     if (!_formKey.currentState!.validate()) {
@@ -216,18 +507,23 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
 
     widget.onAdd(
       _gatewayIdController.text.trim(),
-      _nameController.text.trim().isEmpty 
-          ? null 
+      _nameController.text.trim().isEmpty
+          ? null
           : _nameController.text.trim(),
       _selectedBuildingType,
       _streetController.text.trim(),
       _buildingNumberController.text.trim(),
-      _doorNumberController.text.trim().isEmpty 
-          ? null 
+      _doorNumberController.text.trim().isEmpty
+          ? null
           : _doorNumberController.text.trim(),
+      _neighborhoodController.text.trim().isEmpty
+          ? null
+          : _neighborhoodController.text.trim(),
       _districtController.text.trim(),
       _cityController.text.trim(),
       _postalCodeController.text.trim(),
+      _latitude,
+      _longitude,
     );
 
     Navigator.pop(context);
@@ -600,7 +896,19 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                         textInputAction: TextInputAction.next,
                       ),
                       const SizedBox(height: AppSpacing.md),
-                      
+
+                      // Neighborhood
+                      TextFormField(
+                        controller: _neighborhoodController,
+                        decoration: const InputDecoration(
+                          labelText: 'Mahalle',
+                          hintText: 'Mahalle adı (opsiyonel)',
+                          prefixIcon: Icon(Icons.holiday_village_outlined),
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+
                       // District
                       TextFormField(
                         controller: _districtController,
