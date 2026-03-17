@@ -13,7 +13,9 @@ class GatewayRepository {
 
   Future<BackendGateway> createGateway(Map<String, dynamic> data) async {
     final response = await _apiClient.post(ApiConfig.gateways, data: data);
-    return BackendGateway.fromJson(response.data as Map<String, dynamic>);
+    final responseData = response.data as Map<String, dynamic>;
+    final gatewayData = responseData['gateway'] as Map<String, dynamic>? ?? responseData;
+    return BackendGateway.fromJson(gatewayData);
   }
 
   Future<void> addCitizen(String gatewayId, Map<String, dynamic> citizenData) async {

@@ -23,10 +23,10 @@ class BackendGateway {
       name: json['name'] as String?,
       macAddress: json['macAddress'] as String?,
       status: json['status'] as String?,
-      citizens: (json['citizens'] as List<dynamic>?)
+      citizens: (json['registered_users'] as List<dynamic>? ?? json['citizens'] as List<dynamic>?)
               ?.map((e) => BackendCitizen.fromJson(e as Map<String, dynamic>))
               .toList() ?? [],
-      pets: (json['pets'] as List<dynamic>?)
+      pets: (json['registered_animals'] as List<dynamic>? ?? json['pets'] as List<dynamic>?)
               ?.map((e) => BackendPet.fromJson(e as Map<String, dynamic>))
               .toList() ?? [],
       address: json['address'] as Map<String, dynamic>?,

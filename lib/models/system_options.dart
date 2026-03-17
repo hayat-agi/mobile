@@ -14,12 +14,14 @@ class SystemOptions {
   });
 
   factory SystemOptions.fromJson(Map<String, dynamic> json) {
+    final health = json['healthOptions'] as Map<String, dynamic>? ?? {};
+    final genderMap = json['genderLabels'] as Map<String, dynamic>? ?? {};
     return SystemOptions(
-      bloodTypes: _parseStringList(json['bloodTypes']),
-      medicalConditions: _parseStringList(json['medicalConditions']),
-      medications: _parseStringList(json['medications']),
-      prosthetics: _parseStringList(json['prosthetics']),
-      genderOptions: _parseStringList(json['genderOptions']),
+      bloodTypes: _parseStringList(health['bloodGroups']),
+      medicalConditions: _parseStringList(health['chronicConditions']),
+      medications: _parseStringList(health['medications']),
+      prosthetics: _parseStringList(health['prostheses']),
+      genderOptions: genderMap.values.map((e) => e.toString()).toList(),
     );
   }
 
