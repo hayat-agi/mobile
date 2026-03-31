@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMotionUsageDescription</key>
+	<string>Bu uygulama deprem tespiti için hareket sensörlerini kullanır.</string>
 </dict>
 </plist>

@@ -62,6 +62,7 @@ dependencies:
   torch_light: ^1.0.0
   speech_to_text: ^7.0.0
   flutter_tts: ^4.2.0
+  sensors_plus: ^7.0.0
 
 dev_dependencies:
   flutter_test:
@@ -84,6 +85,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/fixtures/earthquake/TK_3139__3c_25hz.csv
+    - assets/fixtures/earthquake/TK_4615__3c_25hz.csv
+    - assets/fixtures/earthquake/TK_0118__3c_25hz.csv
 
   # To add assets to your application, add an assets section, like this:
   # assets:

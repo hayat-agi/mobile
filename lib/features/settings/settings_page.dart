@@ -8,6 +8,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/auth/auth_service.dart';
 import '../../core/routing/app_router.dart';
+import '../earthquake_detection/earthquake_detection_service.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -189,6 +190,66 @@ class _SettingsPageState extends State<SettingsPage> {
             showDivider: false,
             trailing: null,
           ),
+          // Developer Test Section
+          SectionHeader(
+            title: 'Geliştirici Testi',
+            subtitle: 'Deprem algılama algoritmasını test et',
+          ),
+          ValueListenableBuilder<bool>(
+            valueListenable: EarthquakeDetectionService().isReplaying,
+            builder: (context, replaying, _) {
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.screenPadding,
+                  vertical: AppSpacing.sm,
+                ),
+                leading: Icon(
+                  Icons.science_outlined,
+                  color: replaying
+                      ? theme.colorScheme.onSurfaceVariant
+                      : theme.colorScheme.primary,
+                ),
+                title: Text(
+                  replaying ? 'Simülasyon Çalışıyor...' : 'Deprem Simülasyonu Başlat',
+                  style: AppTypography.titleMedium(context).copyWith(
+                    color: replaying ? theme.colorScheme.onSurfaceVariant : null,
+                  ),
+                ),
+                subtitle: Text(
+                  replaying
+                      ? 'Deprem alarmı ~30 saniye içinde tetiklenecek'
+                      : 'Gerçek sismik veri ile alarm akışını test eder',
+                  style: AppTypography.bodySmall(context).copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                trailing: replaying
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+                onTap: replaying
+                    ? null
+                    : () {
+                        EarthquakeDetectionService().startReplay(
+                          'assets/fixtures/earthquake/TK_3139__3c_25hz.csv',
+                        );
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Simülasyon başladı — ~30 saniye içinde alarm tetiklenecek',
+                            ),
+                            duration: Duration(seconds: 4),
+                          ),
+                        );
+                      },
+              );
+            },
+          ),
+          const Divider(height: 1),
+
           const SizedBox(height: AppSpacing.xl),
         ],
       ),

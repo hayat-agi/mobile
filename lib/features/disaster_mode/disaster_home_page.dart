@@ -28,7 +28,9 @@ import '../ble/ble_service.dart';
 ///   • Flashlight SOS beacon (morse ··· — — — ···)
 ///   • Audio beacon (TTS "YARDIM!" every 30s)
 class DisasterHomePage extends StatefulWidget {
-  const DisasterHomePage({super.key});
+  const DisasterHomePage({super.key, this.autoTriggered = false});
+
+  final bool autoTriggered;
 
   @override
   State<DisasterHomePage> createState() => _DisasterHomePageState();
@@ -510,6 +512,17 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                   'Durumunuzu seçin, detayları işaretleyin, gönderin',
                   style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
+                if (widget.autoTriggered) ...[
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Sismik aktivite tespit edildi — durumunuzu seçin',
+                    style: TextStyle(
+                      color: AppColors.warning,
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

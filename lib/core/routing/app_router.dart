@@ -35,7 +35,10 @@ class AppRouter {
       case dashboard:
         return MaterialPageRoute(builder: (_) => const DashboardPage());
       case disasterHome:
-        return MaterialPageRoute(builder: (_) => const DisasterHomePage());
+        final autoTriggered = routeSettings.arguments as bool? ?? false;
+        return MaterialPageRoute(
+          builder: (_) => DisasterHomePage(autoTriggered: autoTriggered),
+        );
       case messages:
         return MaterialPageRoute(builder: (_) => const MessagesPage());
       case settings:
