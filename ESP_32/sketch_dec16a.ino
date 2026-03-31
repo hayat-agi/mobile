@@ -11,6 +11,7 @@ static const char* CHAR_TX_UUID  = "12345678-1234-1234-1234-123456789abe";
 
 static const uint32_t NOTIFY_INTERVAL_MS = 50;
 static const uint8_t  MAX_CLIENTS        = 3;
+static const uint8_t  PROTOCOL_V2        = 0x02;
 
 // ─── Activation Configuration ───────────────────────────────────────────────
 
@@ -196,6 +197,86 @@ static void queueTxMessage(const char* msg) {
   }
 }
 
+// ─── v2 Packet Helpers ───────────────────────────────────────────────────────
+
+static uint8_t xorChecksum(const uint8_t* data, size_t len) {
+  uint8_t out = 0;
+  for (size_t i = 0; i < len; i++) out ^= data[i];
+  return out;
+}
+
+// Returns true if this write was recognized as a v2 packet (valid or invalid).
+// Returning true means caller should not process this payload as text command.
+static bool tryHandleV2Packet(const std::string& rxValue) {
+  const size_t n = rxValue.size();
+  if (n < 14) return false;  // minimum v2 frame size
+
+  const uint8_t* b = reinterpret_cast<const uint8_t*>(rxValue.data());
+  const uint8_t version = (b[0] >> 6) & 0x03;
+  if (version != PROTOCOL_V2) return false;
+
+  const uint8_t msgLen = b[12];
+  const size_t expectedLen = 13 + (size_t)msgLen + 1;
+
+  if (n != expectedLen) {
+    Serial.printf("[V2] INVALID length: got=%u expected=%u\n",
+                  (unsigned)n, (unsigned)expectedLen);
+    queueTxMessage("MSG_BAD_LEN");
+    return true;
+  }
+
+  const uint8_t expectedCsum = xorChecksum(b, expectedLen - 1);
+  const uint8_t packetCsum = b[expectedLen - 1];
+  if (expectedCsum != packetCsum) {
+    Serial.printf("[V2] INVALID checksum: calc=0x%02X pkt=0x%02X\n",
+                  expectedCsum, packetCsum);
+    queueTxMessage("MSG_BAD_CSUM");
+    return true;
+  }
+
+  const uint8_t priority = (b[0] >> 4) & 0x03;
+  const uint8_t status = (b[0] >> 2) & 0x03;
+  const uint8_t severity = ((b[0] & 0x03) << 2) | ((b[1] >> 6) & 0x03);
+  const uint8_t injuryFlags = b[2];
+  const uint8_t situationFlags = b[3];
+  const uint8_t needsFlags = b[4];
+  const uint8_t peopleFlags = b[5];
+  const uint8_t adults = (b[6] >> 4) & 0x0F;
+  const uint8_t children = b[6] & 0x0F;
+  const uint8_t triageScore = b[7];
+
+  std::string msg;
+  if (msgLen > 0) {
+    msg.assign(reinterpret_cast<const char*>(b + 13), msgLen);
+  }
+
+  Serial.printf("[V2] OK prio=%u status=%u sev=%u triage=%u adults=%u children=%u msgLen=%u\n",
+                priority, status, severity, triageScore, adults, children, msgLen);
+  Serial.printf("[V2] Flags injury=0x%02X situation=0x%02X needs=0x%02X people=0x%02X\n",
+                injuryFlags, situationFlags, needsFlags, peopleFlags);
+  if (!msg.empty()) {
+    Serial.printf("[V2] Message: \"%s\"\n", msg.c_str());
+  }
+
+  queueTxMessage("MSG_OK");
+  return true;
+}
+
+// During pre-activation we only accept explicit password text.
+// Binary frames (or non-printable payloads) must not consume password attempts.
+static bool looksLikeBinaryOrV2(const std::string& rxValue) {
+  if (rxValue.empty()) return false;
+  const uint8_t* b = reinterpret_cast<const uint8_t*>(rxValue.data());
+  const uint8_t version = (b[0] >> 6) & 0x03;
+  if (version == PROTOCOL_V2) return true;
+  for (size_t i = 0; i < rxValue.size(); i++) {
+    const uint8_t c = b[i];
+    const bool printableAscii = (c >= 32 && c <= 126);
+    if (!printableAscii) return true;
+  }
+  return false;
+}
+
 // ─── Forward declarations ───────────────────────────────────────────────────
 
 static void startAdvertising();
@@ -207,16 +288,22 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
     if (clientCount == 0) return;
 
     std::string rxValue = pChar->getValue();
-    Serial.printf("[RX] \"%s\" (%u bytes)\n", rxValue.c_str(),
-                  (unsigned)rxValue.length());
+    Serial.printf("[RX] %u bytes\n", (unsigned)rxValue.length());
 
     std::string trimmed = rxValue;
     trimTrailing(trimmed);
 
     // ── MODE BRANCH: Activation vs Normal ──────────────────────────
     if (!deviceActivated) {
+      if (looksLikeBinaryOrV2(rxValue)) {
+        Serial.println("[AUTH] Ignoring binary/non-text payload in activation mode");
+        queueTxMessage("NEED_ACTIVATION");
+        return;
+      }
       handleActivation(trimmed);
     } else {
+      // In activated mode, first try v2 binary packet handling.
+      if (tryHandleV2Packet(rxValue)) return;
       handleCommand(trimmed);
     }
   }

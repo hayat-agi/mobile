@@ -66,6 +66,16 @@ class BleConnection extends GetxController {
   /// On disconnect, we delay cancelling the completer so ACTIVATED can arrive.
   bool _isWaitingForActivationResponse = false;
 
+  String? _packetAckError(String response) {
+    if (response == BleConstants.respMsgBadLen) {
+      return 'Paket reddedildi: uzunluk hatası';
+    }
+    if (response == BleConstants.respMsgBadChecksum) {
+      return 'Paket reddedildi: checksum hatası';
+    }
+    return null;
+  }
+
   Timer? _activationResponseCancelTimer;
 
   // When true, we're in the middle of connecting. This prevents
@@ -473,7 +483,8 @@ class BleConnection extends GetxController {
       case BleConstants.respMsgOk:
         break;
       default:
-        messages.add('ESP32: $response');
+        final packetError = _packetAckError(response);
+        messages.add(packetError == null ? 'ESP32: $response' : '[System] $packetError');
         break;
     }
   }
@@ -622,6 +633,12 @@ class BleConnection extends GetxController {
       // Check if the ESP32 said "OK"
       if (response == BleConstants.respMsgOk) {
         return true;
+      }
+
+      final packetError = _packetAckError(response);
+      if (packetError != null) {
+        messages.add('[System] $packetError');
+        return false;
       }
 
       messages.add('ESP32: $response');

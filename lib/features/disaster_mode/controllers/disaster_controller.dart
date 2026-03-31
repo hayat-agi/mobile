@@ -3,8 +3,11 @@ import 'dart:typed_data';
 import 'package:get/get.dart';
 import '../models/disaster_enums.dart';
 import '../models/triage_payload.dart';
+import '../models/user_health_profile.dart';
+import '../models/disaster_message_packet.dart';
 import '../../ble/ble_service.dart';
 import '../../../services/gateway_service.dart';
+import '../../user_profile/services/vulnerable_group_service.dart';
 
 /// Controller for the disaster-mode screen.
 ///
@@ -50,6 +53,13 @@ class DisasterController extends GetxController {
   /// Sending state.
   final isSending = false.obs;
   final lastSendSuccess = Rxn<bool>();
+
+  /// Health profile for v2 packet encoding.
+  UserHealthProfile _healthProfile = UserHealthProfile.empty();
+
+  void updateHealthProfile(UserHealthProfile profile) {
+    _healthProfile = profile;
+  }
 
   // ─── Derived BLE state (read from BleService) ─────────────────────
 
@@ -224,6 +234,31 @@ class DisasterController extends GetxController {
     return payload.encode();
   }
 
+  // ─── Flag builders ────────────────────────────────────────────────
+
+  int _buildInjuryFlags() =>
+      selectedInjuries.fold(0, (m, c) => m | (1 << c.bitPosition));
+
+  int _buildSituationFlags() =>
+      selectedSituations.fold(0, (m, c) => m | (1 << c.bitPosition));
+
+  int _buildNeedsFlags() =>
+      selectedNeeds.fold(0, (m, c) => m | (1 << c.bitPosition));
+
+  int _buildPeopleFlags() =>
+      selectedPeople.fold(0, (m, c) => m | (1 << c.bitPosition));
+
+  Future<void> onDisasterActivated() async {
+    final vgs = VulnerableGroupService();
+    await vgs.load();
+    if (!vgs.isVulnerableGroup) return;
+
+    // Keep profile/location context fresh for the next user-triggered send,
+    // but do not auto-transmit on page entry.
+    await vgs.updateLocation();
+    updateHealthProfile(vgs.profile);
+  }
+
   // ─── Send ──────────────────────────────────────────────────────────
 
     /// Encode the current state and send via BLE.
@@ -238,9 +273,6 @@ class DisasterController extends GetxController {
     isSending.value = true;
 
     try {
-      final payload = buildPayload();
-      if (payload.isEmpty) return false;
-
       // Ensure the queue knows which gateway to reconnect to even if
       // this phone has never successfully connected in this session.
       final savedGateways = GatewayService().gateways.value;
@@ -251,9 +283,21 @@ class DisasterController extends GetxController {
         _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
       }
 
-      // sendBinaryQueued: sends raw bytes immediately when connected,
-      // or encodes as hex and queues with full retry when disconnected.
-      await _bleService.sendBinaryQueued(payload);
+      // Build v2 packet and send via BLE queue.
+      final packet = DisasterMessagePacket.simple(
+        triageScore: triageScore.value,
+        triageStatusBitmask: selectedStatus.value?.bitmaskValue ?? 0,
+        severityNibble: (triageScore.value / 17).round().clamp(0, 15),
+        injuryFlags: _buildInjuryFlags(),
+        situationFlags: _buildSituationFlags(),
+        needsFlags: _buildNeedsFlags(),
+        peopleFlags: _buildPeopleFlags(),
+        adultCount: adultCount.value,
+        childCount: childCount.value,
+        healthProfile: _healthProfile,
+        messageText: '',
+      );
+      await _bleService.sendBinaryQueued(packet.encode());
       lastSendSuccess.value = true;
       _startDebounce();
       return true;
@@ -325,7 +369,20 @@ class DisasterController extends GetxController {
     }
 
     try {
-      await _bleService.sendMessage(text.trim());
+      final packet = DisasterMessagePacket.simple(
+        triageScore: triageScore.value,
+        triageStatusBitmask: selectedStatus.value?.bitmaskValue ?? 0,
+        severityNibble: (triageScore.value / 17).round().clamp(0, 15),
+        injuryFlags: _buildInjuryFlags(),
+        situationFlags: _buildSituationFlags(),
+        needsFlags: _buildNeedsFlags(),
+        peopleFlags: _buildPeopleFlags(),
+        adultCount: adultCount.value,
+        childCount: childCount.value,
+        healthProfile: _healthProfile,
+        messageText: text.trim(),
+      );
+      await _bleService.sendBinaryQueued(packet.encode());
       return true;
     } catch (_) {
       return false;

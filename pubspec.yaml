@@ -64,6 +64,10 @@ dependencies:
   flutter_tts: ^4.2.0
   sensors_plus: ^7.0.0
 
+  # Battery and brightness management
+  battery_plus: ^6.0.0
+  screen_brightness: ^0.2.1+1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -6,6 +6,38 @@ import 'core/auth/auth_service.dart';
 import 'features/earthquake_detection/earthquake_detection_service.dart';
 import 'features/earthquake_detection/earthquake_state.dart';
 import 'features/earthquake_detection/widgets/earthquake_confirm_dialog.dart';
+import 'features/disaster_mode/services/battery_optimization_service.dart';
+
+/// Navigator observer that activates/deactivates [BatteryOptimizationService]
+/// whenever the app enters or leaves the [AppRouter.disasterHome] route.
+class _DisasterModeObserver extends NavigatorObserver {
+  void _activate() => BatteryOptimizationService().activate();
+  void _deactivate() => BatteryOptimizationService().deactivate();
+
+  bool _isDisasterRoute(Route<dynamic>? route) =>
+      route?.settings.name == AppRouter.disasterHome;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (_isDisasterRoute(route)) _activate();
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    if (_isDisasterRoute(newRoute)) _activate();
+    if (_isDisasterRoute(oldRoute) && !_isDisasterRoute(newRoute)) _deactivate();
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (_isDisasterRoute(route)) _deactivate();
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (_isDisasterRoute(route)) _deactivate();
+  }
+}
 
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
@@ -16,6 +48,7 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
+  final _disasterObserver = _DisasterModeObserver();
   StreamSubscription<EarthquakeEvent>? _earthquakeSub;
 
   @override
@@ -49,6 +82,7 @@ class _MyAppState extends State<MyApp> {
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
       navigatorKey: _navigatorKey,
+      navigatorObservers: [_disasterObserver],
       onGenerateRoute: AppRouter.generateRoute,
       initialRoute: isAuthenticated ? AppRouter.dashboard : AppRouter.login,
       debugShowCheckedModeBanner: false,

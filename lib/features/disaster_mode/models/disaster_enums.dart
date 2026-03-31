@@ -426,3 +426,38 @@ extension TriageCategoryX on TriageCategory {
     return TriageCategory.red;
   }
 }
+
+// ─── Priority level for v2 packet protocol ──────────────────────────
+
+enum PriorityLevel {
+  critical, // triage score >= 80
+  high,     // triage score >= 50
+  medium,   // triage score >= 20
+  low,      // triage score < 20
+  ;
+
+  static PriorityLevel fromTriageScore(int score) {
+    if (score >= 80) return PriorityLevel.critical;
+    if (score >= 50) return PriorityLevel.high;
+    if (score >= 20) return PriorityLevel.medium;
+    return PriorityLevel.low;
+  }
+
+  int get bitmask {
+    switch (this) {
+      case PriorityLevel.low:      return 0x00;
+      case PriorityLevel.medium:   return 0x01;
+      case PriorityLevel.high:     return 0x02;
+      case PriorityLevel.critical: return 0x03;
+    }
+  }
+
+  static PriorityLevel fromBitmask(int bits) {
+    switch (bits & 0x03) {
+      case 0x03: return PriorityLevel.critical;
+      case 0x02: return PriorityLevel.high;
+      case 0x01: return PriorityLevel.medium;
+      default:   return PriorityLevel.low;
+    }
+  }
+}

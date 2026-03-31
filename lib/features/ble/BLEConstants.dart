@@ -30,6 +30,8 @@ class BleConstants {
 
   /// "Message OK" — the ESP32 received our message and processed it
   static const String respMsgOk = 'MSG_OK';
+  static const String respMsgBadLen = 'MSG_BAD_LEN';
+  static const String respMsgBadChecksum = 'MSG_BAD_CSUM';
 
   /// "Reset OK" — the ESP32 accepted the factory reset command
   static const String respResetOk = 'RESET_OK';
@@ -114,4 +116,15 @@ class BleConstants {
   /// Minimum pause between drain cycles in disaster mode so one
   /// phone cannot monopolize the gateway.
   static const Duration drainCooldown = Duration(seconds: 5);
+
+  // ── Protocol Versions ────────────────────────────────────────────────
+
+  /// v1 protocol — 8-byte TriagePayload (legacy)
+  static const int protocolVersionV1 = 0x01;
+
+  /// v2 protocol — DisasterMessagePacket with health profile + message text
+  static const int protocolVersionV2 = 0x02;
+
+  /// Active protocol version used by DisasterController
+  static const int currentProtocolVersion = protocolVersionV2;
 }

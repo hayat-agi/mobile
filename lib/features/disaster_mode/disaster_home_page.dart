@@ -11,6 +11,11 @@ import 'models/disaster_enums.dart';
 import 'widgets/status_action_button.dart';
 import 'widgets/smart_chip_selector.dart';
 import 'widgets/triage_score_display.dart';
+import 'widgets/pfa_support_overlay.dart';
+import 'services/pfa_message_service.dart';
+import 'services/battery_optimization_service.dart';
+import 'data/pfa_messages.dart';
+import '../user_profile/services/vulnerable_group_service.dart';
 import '../../core/routing/app_router.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_colors.dart';
@@ -39,6 +44,10 @@ class DisasterHomePage extends StatefulWidget {
 class _DisasterHomePageState extends State<DisasterHomePage> {
   late final DisasterController _ctrl;
   final _manualTextController = TextEditingController();
+
+  // ── PFA overlay ───────────────────────────────────────────────────
+  PfaMessage? _pfaMessage;
+  bool _isVulnerableProfile = false;
 
   // ── Voice-to-text ──────────────────────────────────────────────────
   final _speech = SpeechToText();
@@ -73,12 +82,26 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
     _initSpeech();
     _initTts();
+    VulnerableGroupService().load().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _isVulnerableProfile = VulnerableGroupService().isVulnerableGroup;
+      });
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ctrl.onDisasterActivated();
+      _startNoResponseTimer();
+    });
   }
 
   @override
   void dispose() {
     // Deactivate disaster mode safely — defers if a queue drain is in progress
     BleService().deactivateDisasterMode();
+
+    // Cancel PFA no-response timer
+    PFAMessageService().cancelNoResponseTimer();
 
     _manualTextController.dispose();
 
@@ -261,29 +284,54 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     setState(() => _isSoundActive = false);
   }
 
-  // ─── Send handlers ─────────────────────────────────────────────────
+  // ─── PFA helpers ───────────────────────────────────────────────────
 
-  Future<void> _onSend() async {
-    HapticFeedback.mediumImpact();
+  void _showPfaMessage(PfaMessage message) {
+    if (mounted) setState(() => _pfaMessage = message);
+  }
 
-    final success = await _ctrl.sendStatus();
+  void _dismissPfa() {
+    setState(() => _pfaMessage = null);
+    _startNoResponseTimer(); // restart after dismiss
+  }
 
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          success
-              ? (_ctrl.isConnected
-                  ? 'Durum bilgisi gönderildi'
-                  : 'Kuyruğa alındı — bağlantı kurulunca iletilecek')
-              : 'Gateway eklenmemiş — önce bir gateway ekleyin',
-        ),
-        backgroundColor: success ? AppColors.success : AppColors.danger,
-        duration: const Duration(seconds: 3),
-      ),
+  void _startNoResponseTimer() {
+    final interval = BatteryOptimizationService().nonCriticalInterval;
+    PFAMessageService().startNoResponseTimer(
+      duration: interval,
+      onTimeout: () {
+        if (mounted) {
+          final risk = _ctrl.triageScore.value;
+          _showPfaMessage(
+            PFAMessageService().selectMessage(
+                  PfaCategory.uncertainty,
+                  isVulnerable: _isVulnerableProfile,
+                  riskScore: risk,
+                  seed: 'no-response-$risk',
+                ) ??
+                PFAMessageService().firstContactMessage(),
+          );
+        }
+      },
     );
   }
+
+  void _onUserMessageSent(String text) {
+    PFAMessageService().cancelNoResponseTimer();
+    final risk = _ctrl.triageScore.value;
+    final category =
+        PFAMessageService().detectCategoryWithRisk(text, riskScore: risk);
+    final msg = PFAMessageService().selectMessage(
+      category,
+      isVulnerable: _isVulnerableProfile,
+      riskScore: risk,
+      seed: text,
+    );
+    if (msg != null) _showPfaMessage(msg);
+    _startNoResponseTimer();
+  }
+
+  // ─── Send handlers ─────────────────────────────────────────────────
 
   Future<void> _onManualSend() async {
     final text = _manualTextController.text.trim();
@@ -297,6 +345,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
     if (success) {
       _manualTextController.clear();
+      _onUserMessageSent(text);
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -321,7 +370,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: _buildAppBar(),
-      body: SafeArea(
+      body: Stack(
+        children: [
+          SafeArea(
         child: Obx(() {
           final status = _ctrl.selectedStatus.value;
 
@@ -404,10 +455,6 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                       )),
                   const SizedBox(height: 24),
 
-                  // Send button
-                  _buildSendButton(),
-                  const SizedBox(height: 16),
-
                   // Manual text input with voice-to-text
                   _buildManualTextInput(),
                   const SizedBox(height: 16),
@@ -424,6 +471,16 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
             ),
           );
         }),
+      ),
+          // PFA support overlay — rendered on top of all content
+          if (_pfaMessage != null)
+            Positioned.fill(
+              child: PFASupportOverlay(
+                message: _pfaMessage!,
+                onDismiss: _dismissPfa,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -602,89 +659,6 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
         ],
       ),
     );
-  }
-
-  // ─── Send button ───────────────────────────────────────────────────
-
-  Widget _buildSendButton() {
-    return Obx(() {
-      final canSend = _ctrl.canSend.value;
-      final isSending = _ctrl.isSending.value;
-      final hasStatus = _ctrl.selectedStatus.value != null;
-      final connected = _ctrl.isConnected;
-      // Button stays enabled when disconnected — payload will be queued
-      // and delivered automatically when the connection is restored.
-      final enabled = canSend && hasStatus && !isSending;
-
-      final color = enabled ? _ctrl.triageCategory.value.color : Colors.grey.shade700;
-
-      return Column(
-        children: [
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton(
-              onPressed: enabled ? _onSend : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: color,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey.shade800,
-                disabledForegroundColor: Colors.grey.shade500,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                elevation: enabled ? 4 : 0,
-              ),
-              child: isSending
-                  ? const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.send, size: 22),
-                        const SizedBox(width: 10),
-                        Text(
-                          canSend
-                              ? 'DURUM BİLDİR'
-                              : 'BEKLEME (${_ctrl.debounceFormatted})',
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ],
-                    ),
-            ),
-          ),
-
-          // Status hints
-          if (!connected && hasStatus)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                'Bağlantı yok — gönderilince iletilecek',
-                style: TextStyle(color: Colors.orange, fontSize: 12),
-              ),
-            ),
-          if (!canSend)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                'Yeni durum bildirimi için ${_ctrl.debounceFormatted} bekleyin',
-                style: TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-            ),
-        ],
-      );
-    });
   }
 
   // ─── Manual text input with voice-to-text ──────────────────────────
