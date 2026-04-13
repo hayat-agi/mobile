@@ -8,7 +8,6 @@ import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'BLEConstants.dart';
-
 // ═══════════════════════════════════════════════════════════════════════════
 //  BLE Connection Manager
 //
@@ -41,13 +40,25 @@ class BleConnection extends GetxController {
   final needsActivation = false.obs;   // true when ESP32 is in factory state
 
   // ── Private stuff (not visible to the UI) ──
-  BluetoothDevice? _device;           // the ESP32 we're connected to
-  BluetoothCharacteristic? _rx;       // characteristic we write to
-  BluetoothCharacteristic? _tx;       // characteristic we get notifications from
+  BluetoothDevice? _device;               // the ESP32 we're connected to
+  BluetoothCharacteristic? _rx;           // characteristic we write to
+  BluetoothCharacteristic? _tx;           // characteristic we get notifications from
+  BluetoothCharacteristic? _sensor;       // MPU-6050 sensor stream characteristic
 
   StreamSubscription<List<ScanResult>>? _scanSub;       // scan results listener
   StreamSubscription<BluetoothConnectionState>? _connSub; // connection state listener
   StreamSubscription<List<int>>? _notifySub;             // notification listener
+  StreamSubscription<List<int>>? _sensorSub;             // sensor stream listener
+
+  /// Broadcast stream of raw 24-byte MPU-6050 sensor packets from the ESP32.
+  /// Emits whenever a sensor NOTIFY arrives. Empty when no ESP32 is connected.
+  final _sensorController = StreamController<List<int>>.broadcast();
+
+  /// Raw sensor byte stream — decode with [SensorPacket.fromBytes].
+  Stream<List<int>> get rawSensorStream => _sensorController.stream;
+
+  /// True when the connected ESP32 exposes the external sensor characteristic.
+  bool get hasSensorCharacteristic => _sensor != null;
 
   // This timer lets go of the Gateway connection after a period of silence.
   // This is CRITICAL so other people in the building can also connect and send messages.
@@ -374,15 +385,17 @@ class BleConnection extends GetxController {
             BleConstants.serviceUuid.toLowerCase(),
       );
 
-      // Step 7: Find the RX and TX characteristics inside that service
+      // Step 7: Find the RX, TX, and sensor characteristics inside that service
       status.value = 'Finding characteristics…';
       _rx = null;
       _tx = null;
+      _sensor = null;
 
       for (final c in service.characteristics) {
         final uuid = c.uuid.toString().toLowerCase();
-        if (uuid == BleConstants.charRxUuid.toLowerCase()) _rx = c;
-        if (uuid == BleConstants.charTxUuid.toLowerCase()) _tx = c;
+        if (uuid == BleConstants.charRxUuid.toLowerCase())     _rx = c;
+        if (uuid == BleConstants.charTxUuid.toLowerCase())     _tx = c;
+        if (uuid == BleConstants.charSensorUuid.toLowerCase()) _sensor = c;
       }
 
       if (_rx == null || _tx == null) {
@@ -400,6 +413,15 @@ class BleConnection extends GetxController {
 
       await _tx!.setNotifyValue(true);
       await Future.delayed(BleConstants.notifySetupDelay);
+
+      // Subscribe to sensor characteristic if the ESP32 exposes it
+      if (_sensor != null) {
+        _sensorSub?.cancel();
+        _sensorSub = _sensor!.onValueReceived.listen((bytes) {
+          _sensorController.add(bytes);
+        });
+        await _sensor!.setNotifyValue(true);
+      }
 
       // Extra wait — Android needs time to fully register the notification
       await Future.delayed(const Duration(milliseconds: 300));
@@ -801,6 +823,10 @@ class BleConnection extends GetxController {
       _notifySub = null;
     }
 
+    _sensorSub?.cancel();
+    _sensorSub = null;
+    _sensor = null;
+
     _connSub?.cancel();
     _connSub = null;
 
@@ -994,10 +1020,12 @@ class BleConnection extends GetxController {
 
       _rx = null;
       _tx = null;
+      _sensor = null;
       for (final c in service.characteristics) {
         final uuid = c.uuid.toString().toLowerCase();
-        if (uuid == BleConstants.charRxUuid.toLowerCase()) _rx = c;
-        if (uuid == BleConstants.charTxUuid.toLowerCase()) _tx = c;
+        if (uuid == BleConstants.charRxUuid.toLowerCase())     _rx = c;
+        if (uuid == BleConstants.charTxUuid.toLowerCase())     _tx = c;
+        if (uuid == BleConstants.charSensorUuid.toLowerCase()) _sensor = c;
       }
 
       if (_rx == null || _tx == null) throw 'Characteristics not found';
@@ -1010,6 +1038,16 @@ class BleConnection extends GetxController {
 
       await _tx!.setNotifyValue(true);
       await Future.delayed(BleConstants.notifySetupDelay);
+
+      // Re-subscribe to sensor characteristic if available
+      if (_sensor != null) {
+        _sensorSub?.cancel();
+        _sensorSub = _sensor!.onValueReceived.listen((bytes) {
+          _sensorController.add(bytes);
+        });
+        await _sensor!.setNotifyValue(true);
+      }
+
       await Future.delayed(const Duration(milliseconds: 300));
 
       if (!_device!.isConnected) throw 'Connection dropped during setup';

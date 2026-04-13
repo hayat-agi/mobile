@@ -1,13 +1,22 @@
 #include <NimBLEDevice.h>
 #include <Preferences.h>
+#include <Wire.h>
 #include "tx_ring_buffer.h"
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-static const char* DEVICE_NAME   = "ESP32_BLE_DEVICE";
-static const char* SERVICE_UUID  = "12345678-1234-1234-1234-123456789abc";
-static const char* CHAR_RX_UUID  = "12345678-1234-1234-1234-123456789abd";
-static const char* CHAR_TX_UUID  = "12345678-1234-1234-1234-123456789abe";
+static const char* DEVICE_NAME        = "ESP32_BLE_DEVICE";
+static const char* SERVICE_UUID       = "12345678-1234-1234-1234-123456789abc";
+static const char* CHAR_RX_UUID       = "12345678-1234-1234-1234-123456789abd";
+static const char* CHAR_TX_UUID       = "12345678-1234-1234-1234-123456789abe";
+static const char* CHAR_SENSOR_UUID   = "12345678-1234-1234-1234-123456789abf";
+
+// ─── MPU-6050 Configuration ─────────────────────────────────────────────────
+
+static const uint8_t  MPU_ADDR          = 0x68;
+static const int      MPU_SDA_PIN       = 32;
+static const int      MPU_SCL_PIN       = 33;
+static const uint32_t SENSOR_INTERVAL_MS = 40;   // 25 Hz
 
 static const uint32_t NOTIFY_INTERVAL_MS = 50;
 static const uint8_t  MAX_CLIENTS        = 3;
@@ -174,9 +183,21 @@ static uint8_t txRingCount(TxRingBuffer& rb) {
 // ─── Globals ────────────────────────────────────────────────────────────────
 
 static NimBLECharacteristic* pTxChar          = nullptr;
+static NimBLECharacteristic* pSensorChar      = nullptr;
 static volatile uint8_t      clientCount      = 0;
 static volatile uint8_t      subscribedCount  = 0;
+static volatile uint8_t      sensorSubCount   = 0;
 static uint32_t              lastNotifyMs     = 0;
+static uint32_t              lastSensorMs     = 0;
+
+struct ClientSubscriptionState {
+  bool     inUse            = false;
+  uint16_t connHandle       = 0;
+  bool     txSubscribed     = false;
+  bool     sensorSubscribed = false;
+};
+
+static ClientSubscriptionState clientSubscriptions[MAX_CLIENTS];
 
 // ─── Utility ────────────────────────────────────────────────────────────────
 
@@ -189,6 +210,47 @@ static void trimTrailing(std::string& s) {
       break;
     }
   }
+}
+
+static ClientSubscriptionState* findClientSubscription(uint16_t connHandle) {
+  for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
+    if (clientSubscriptions[i].inUse && clientSubscriptions[i].connHandle == connHandle) {
+      return &clientSubscriptions[i];
+    }
+  }
+
+  return nullptr;
+}
+
+static ClientSubscriptionState* ensureClientSubscription(uint16_t connHandle) {
+  ClientSubscriptionState* state = findClientSubscription(connHandle);
+  if (state != nullptr) {
+    return state;
+  }
+
+  for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
+    if (!clientSubscriptions[i].inUse) {
+      clientSubscriptions[i].inUse = true;
+      clientSubscriptions[i].connHandle = connHandle;
+      clientSubscriptions[i].txSubscribed = false;
+      clientSubscriptions[i].sensorSubscribed = false;
+      return &clientSubscriptions[i];
+    }
+  }
+
+  return nullptr;
+}
+
+static void clearClientSubscription(uint16_t connHandle) {
+  ClientSubscriptionState* state = findClientSubscription(connHandle);
+  if (state == nullptr) {
+    return;
+  }
+
+  state->inUse = false;
+  state->connHandle = 0;
+  state->txSubscribed = false;
+  state->sensorSubscribed = false;
 }
 
 static void queueTxMessage(const char* msg) {
@@ -388,22 +450,134 @@ private:
 // ─── TX Callbacks (CCCD subscribe tracking) ─────────────────────────────────
 
 class TxCallbacks : public NimBLECharacteristicCallbacks {
-  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo&,
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& info,
                    uint16_t subValue) override {
+    const uint16_t connHandle = info.getConnHandle();
+    ClientSubscriptionState* state = ensureClientSubscription(connHandle);
+    if (state == nullptr) {
+      Serial.printf("[CCCD] ERROR - no slot for conn=%u\n", connHandle);
+      return;
+    }
+
     if (subValue == 0) {
-      if (subscribedCount > 0) subscribedCount--;
-      Serial.println("[CCCD] Client UNSUBSCRIBED");
-    } else {
+      if (state->txSubscribed) {
+        state->txSubscribed = false;
+        if (subscribedCount > 0) subscribedCount--;
+      }
+      Serial.printf("[CCCD] Client UNSUBSCRIBED (conn=%u)\n", connHandle);
+    } else if (!state->txSubscribed) {
+      state->txSubscribed = true;
       subscribedCount++;
-      Serial.printf("[CCCD] Client SUBSCRIBED (0x%04X)\n", subValue);
+      Serial.printf("[CCCD] Client SUBSCRIBED (conn=%u, 0x%04X)\n", connHandle, subValue);
+    } else {
+      Serial.printf("[CCCD] Client subscription unchanged (conn=%u, 0x%04X)\n", connHandle, subValue);
     }
   }
 };
+
+// ─── Sensor Characteristic Callbacks (CCCD subscribe tracking) ──────────────
+
+class SensorCallbacks : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& info,
+                   uint16_t subValue) override {
+    const uint16_t connHandle = info.getConnHandle();
+    ClientSubscriptionState* state = ensureClientSubscription(connHandle);
+    if (state == nullptr) {
+      Serial.printf("[SENSOR] ERROR - no slot for conn=%u\n", connHandle);
+      return;
+    }
+
+    if (subValue == 0) {
+      if (state->sensorSubscribed) {
+        state->sensorSubscribed = false;
+        if (sensorSubCount > 0) sensorSubCount--;
+      }
+      Serial.printf("[SENSOR] Client UNSUBSCRIBED from sensor stream (conn=%u)\n", connHandle);
+    } else if (!state->sensorSubscribed) {
+      state->sensorSubscribed = true;
+      sensorSubCount++;
+      Serial.printf("[SENSOR] Client SUBSCRIBED to sensor stream (conn=%u, 0x%04X)\n", connHandle, subValue);
+    } else {
+      Serial.printf("[SENSOR] Client subscription unchanged (conn=%u, 0x%04X)\n", connHandle, subValue);
+    }
+  }
+};
+
+// ─── MPU-6050 Helpers ────────────────────────────────────────────────────────
+
+static void mpuWriteReg(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission(true);
+}
+
+static void mpuInit() {
+  Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
+  delay(100);
+  mpuWriteReg(0x6B, 0x00);  // PWR_MGMT_1: wake up
+  mpuWriteReg(0x1C, 0x00);  // ACCEL_CONFIG: ±2g
+  mpuWriteReg(0x1B, 0x00);  // GYRO_CONFIG: ±250°/s
+  Serial.println("[MPU] MPU-6050 initialized (SDA=32, SCL=33, addr=0x68)");
+}
+
+// Read 14 bytes from MPU-6050 and pack into 24-byte sensor packet.
+// Packet format: 6 × float32 little-endian [ax, ay, az, gx, gy, gz]
+// ax/ay/az in m/s²; gx/gy/gz in rad/s
+static bool mpuReadAndPack(uint8_t* out24) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B);  // ACCEL_XOUT_H — start of 14-byte block
+  if (Wire.endTransmission(false) != 0) return false;
+
+  uint8_t received = Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)14, (uint8_t)true);
+  if (received < 14) return false;
+
+  uint8_t raw[14];
+  for (int i = 0; i < 14; i++) raw[i] = Wire.read();
+
+  // Combine high/low bytes into signed 16-bit integers
+  int16_t rawAx = (int16_t)((raw[0]  << 8) | raw[1]);
+  int16_t rawAy = (int16_t)((raw[2]  << 8) | raw[3]);
+  int16_t rawAz = (int16_t)((raw[4]  << 8) | raw[5]);
+  // raw[6..7] = temperature (skip)
+  int16_t rawGx = (int16_t)((raw[8]  << 8) | raw[9]);
+  int16_t rawGy = (int16_t)((raw[10] << 8) | raw[11]);
+  int16_t rawGz = (int16_t)((raw[12] << 8) | raw[13]);
+
+  // Scale to physical units
+  // Accel: ±2g range → LSB/g = 16384.0 → m/s² = raw / 16384.0 * 9.81
+  // Gyro:  ±250°/s range → LSB/(°/s) = 131.0 → rad/s = raw / 131.0 * π/180
+  const float ACCEL_SCALE = 9.81f / 16384.0f;
+  const float GYRO_SCALE  = (3.14159265f / 180.0f) / 131.0f;
+
+  float ax = rawAx * ACCEL_SCALE;
+  float ay = rawAy * ACCEL_SCALE;
+  float az = rawAz * ACCEL_SCALE;
+  float gx = rawGx * GYRO_SCALE;
+  float gy = rawGy * GYRO_SCALE;
+  float gz = rawGz * GYRO_SCALE;
+
+  // Pack as 6 × float32 little-endian into out24
+  memcpy(out24 +  0, &ax, 4);
+  memcpy(out24 +  4, &ay, 4);
+  memcpy(out24 +  8, &az, 4);
+  memcpy(out24 + 12, &gx, 4);
+  memcpy(out24 + 16, &gy, 4);
+  memcpy(out24 + 20, &gz, 4);
+
+  return true;
+}
 
 // ─── BLE Server Callbacks ───────────────────────────────────────────────────
 
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo& info) override {
+    const uint16_t connHandle = info.getConnHandle();
+    ClientSubscriptionState* state = ensureClientSubscription(connHandle);
+    if (state == nullptr) {
+      Serial.printf("[BLE] ERROR - no slot for conn=%u\n", connHandle);
+    }
+
     clientCount++;
     Serial.printf("[BLE] Client connected (%d total)\n", clientCount);
 
@@ -421,9 +595,22 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     }
   }
 
-  void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
+  void onDisconnect(NimBLEServer*, NimBLEConnInfo& info, int reason) override {
+    const uint16_t connHandle = info.getConnHandle();
+    ClientSubscriptionState* state = findClientSubscription(connHandle);
+
     if (clientCount > 0) clientCount--;
-    if (subscribedCount > 0) subscribedCount--;
+
+    if (state != nullptr) {
+      if (state->txSubscribed && subscribedCount > 0) {
+        subscribedCount--;
+      }
+      if (state->sensorSubscribed && sensorSubCount > 0) {
+        sensorSubCount--;
+      }
+      clearClientSubscription(connHandle);
+    }
+
     Serial.printf("[BLE] Disconnected (reason %d, %d remain)\n", reason, clientCount);
     startAdvertising();
   }
@@ -482,6 +669,9 @@ void setup() {
 
   txRingInit(txRing);
 
+  // ── MPU-6050 initialization ──
+  mpuInit();
+
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P3);
 
@@ -504,25 +694,34 @@ void setup() {
   );
   pTxChar->setCallbacks(new TxCallbacks());
 
+  // SENSOR — MPU-6050 stream (NOTIFY + READ, 24-byte float32 packet at 25 Hz)
+  pSensorChar = pService->createCharacteristic(
+    CHAR_SENSOR_UUID,
+    NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ
+  );
+  pSensorChar->setCallbacks(new SensorCallbacks());
+
   pService->start();
 
   setupAdvertising();
   startAdvertising();
 
   Serial.println("------------------------------------------");
-  Serial.printf("  Service : %s\n", SERVICE_UUID);
-  Serial.printf("  RX Char : %s\n", CHAR_RX_UUID);
-  Serial.printf("  TX Char : %s\n", CHAR_TX_UUID);
-  Serial.printf("  Status  : %s\n", deviceActivated ? "READY" : "AWAITING ACTIVATION");
+  Serial.printf("  Service      : %s\n", SERVICE_UUID);
+  Serial.printf("  RX Char      : %s\n", CHAR_RX_UUID);
+  Serial.printf("  TX Char      : %s\n", CHAR_TX_UUID);
+  Serial.printf("  Sensor Char  : %s\n", CHAR_SENSOR_UUID);
+  Serial.printf("  Status       : %s\n", deviceActivated ? "READY" : "AWAITING ACTIVATION");
   Serial.println("------------------------------------------");
 }
 
 // ─── loop() ─────────────────────────────────────────────────────────────────
 
 void loop() {
-  // Drain ring buffer — only when client is connected and subscribed
+  uint32_t now = millis();
+
+  // ── Drain TX ring buffer — text notifications (disaster mode, activation) ──
   if (clientCount > 0 && subscribedCount > 0 && pTxChar && txRingCount(txRing) > 0) {
-    uint32_t now = millis();
     if (now - lastNotifyMs >= NOTIFY_INTERVAL_MS) {
       char msg[TX_MSG_MAX_LEN];
       if (txRingPop(txRing, msg, sizeof(msg))) {
@@ -534,6 +733,18 @@ void loop() {
         }
         lastNotifyMs = now;
       }
+    }
+  }
+
+  // ── MPU-6050 sensor stream — 25 Hz NOTIFY (only when a client subscribed) ──
+  if (clientCount > 0 && sensorSubCount > 0 && pSensorChar) {
+    if (now - lastSensorMs >= SENSOR_INTERVAL_MS) {
+      uint8_t packet[24];
+      if (mpuReadAndPack(packet)) {
+        pSensorChar->setValue(packet, sizeof(packet));
+        pSensorChar->notify();
+      }
+      lastSensorMs = now;
     }
   }
 

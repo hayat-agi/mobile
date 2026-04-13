@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:get/get.dart';
 import 'BLEConnectionManager.dart';
+import 'sensor_packet.dart';
 import '../../services/gateway_service.dart';
 
 /// The main BLE service — a singleton that all pages share.
@@ -77,6 +78,19 @@ class BleService {
   /// Direct access to the BLE connection manager.
   /// Use this in GetX pages (with Obx) for reactive state.
   BleConnection get bleConnection => _bleConnection;
+
+  /// True when the connected ESP32 exposes the external sensor characteristic.
+  bool get hasSensorCharacteristic => _bleConnection.hasSensorCharacteristic;
+
+  // ── Sensor Stream ───────────────────────────────────────────────
+
+  /// Decoded MPU-6050 sensor stream from the ESP32 (25 Hz when connected).
+  /// Automatically decodes the raw 24-byte BLE packets into [SensorPacket].
+  /// Emits nothing when no ESP32 is connected.
+  Stream<SensorPacket> get sensorStream => _bleConnection.rawSensorStream
+      .map(SensorPacket.fromBytes)
+      .where((p) => p != null)
+      .cast<SensorPacket>();
 
   // ── Scan ────────────────────────────────────────────────────────
 

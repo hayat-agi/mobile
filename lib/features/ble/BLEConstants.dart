@@ -25,6 +25,11 @@ class BleConstants {
   static const String charTxUuid =
       '12345678-1234-1234-1234-123456789abe';
 
+  /// Sensor stream characteristic — ESP32 notifies 24-byte MPU-6050 packets at 25 Hz.
+  /// Packet: 6 × float32 little-endian [ax, ay, az (m/s²), gx, gy, gz (rad/s)]
+  static const String charSensorUuid =
+      '12345678-1234-1234-1234-123456789abf';
+
   // ── ESP32 Response Codes ────────────────────────────────────────
   // These are the text strings the ESP32 sends back to us
 
