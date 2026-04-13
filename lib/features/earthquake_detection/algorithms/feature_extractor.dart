@@ -18,20 +18,17 @@ class FeatureResult {
   /// Gaussian = 0, impulsive human motion > 3, sustained shaking ≈ 0–2.
   final double kurtosis;
 
-  /// True if at least two of IQR, ZC, and CAV pass their thresholds (MyShake-style
-  /// feature layer; avoids one marginal metric vetoing a clear event).
-  ///
-  /// Additionally, very high kurtosis vetoes the detection because impulsive
-  /// human activities (phone pickup, single knock) produce sharp spikes that
-  /// can fool individual metrics.
+  /// True if at least two of IQR, ZC, CAV, and kurtosis pass their thresholds
+  /// (MyShake-style 2-of-4 vote). Low kurtosis (< threshold) votes for detection
+  /// because sustained shaking has near-Gaussian distribution; impulsive human
+  /// motion has high kurtosis and loses this vote.
   bool get isEarthquake {
-    // Veto: impulsive signal — likely human activity, not sustained shaking
-    if (kurtosis > EarthquakeConfig.kurtosisVetoThreshold) return false;
-
+    // 2-of-4 vote: IQR, ZC, CAV, and kurtosis (low kurtosis = sustained shaking, not impulsive)
     var passed = 0;
     if (iqr >= EarthquakeConfig.iqrThreshold) passed++;
     if (zeroCrossingRate >= EarthquakeConfig.zcThreshold) passed++;
     if (cav >= EarthquakeConfig.cavThreshold) passed++;
+    if (kurtosis < EarthquakeConfig.kurtosisVoteThreshold) passed++;
     return passed >= 2;
   }
 
@@ -48,55 +45,53 @@ class FeatureExtractor {
   static FeatureResult? analyze(List<double> samples) {
     if (samples.length < 10) return null; // need at least 10 samples
 
-    // dt per sample in seconds
-    final dt = EarthquakeConfig.samplingInterval.inMilliseconds / 1000.0;
+    const dt = EarthquakeConfig.samplingIntervalSeconds;
     final n = samples.length;
 
-    // --- IQR ---
+    // --- IQR (requires sort — unavoidable separate step) ---
     final sorted = List<double>.from(samples)..sort();
     final q1 = sorted[n ~/ 4];
     final q3 = sorted[(3 * n) ~/ 4];
     final iqr = q3 - q1;
 
-    // --- ZC (Zero Crossing Rate) ---
-    // Count how many times the signal crosses zero (sign changes relative to mean)
-    final mean = samples.fold(0.0, (a, b) => a + b) / n;
+    // --- Pass 1: mean, m2 (variance), m4 (for kurtosis), cav, peak ---
+    double sum = 0.0;
+    double cav = 0.0;
+    double peak = 0.0;
+    for (int i = 0; i < n; i++) {
+      final v = samples[i];
+      sum += v;
+      if (v > peak) peak = v;
+      cav += v < 0 ? -v : v;
+    }
+    final mean = sum / n;
+    cav *= dt;
+
+    double m2 = 0.0;
+    double m4 = 0.0;
+    for (int i = 0; i < n; i++) {
+      final d = samples[i] - mean;
+      final d2 = d * d;
+      m2 += d2;
+      m4 += d2 * d2;
+    }
+    m2 /= n;
+    m4 /= n;
+
+    final kurtosis = m2 > 1e-12 ? (m4 / (m2 * m2)) - 3.0 : 0.0;
+
+    // --- Pass 2: zero-crossing rate (needs mean from pass 1) ---
     int crossings = 0;
     for (int i = 1; i < n; i++) {
-      final prev = samples[i - 1] - mean;
-      final curr = samples[i] - mean;
-      if (prev * curr < 0) crossings++;
+      if ((samples[i - 1] - mean) * (samples[i] - mean) < 0) crossings++;
     }
-    // Normalize to crossings per second
-    final windowSeconds = n * dt;
-    final zeroCrossingRate = crossings / windowSeconds;
-
-    // --- CAV (Cumulative Absolute Velocity) ---
-    // sum(|a_i| * dt) over the window
-    final cav = samples.fold(0.0, (sum, a) => sum + a.abs()) * dt;
-
-    // --- Peak acceleration ---
-    final peakAcceleration = samples.fold(0.0, (max, a) => a > max ? a : max);
-
-    // --- Kurtosis (excess) ---
-    // Kurt = E[(x-μ)⁴] / σ⁴ − 3
-    // Gaussian = 0. Impulsive human motion > 3. Sustained shaking ≈ 0–2.
-    final m2 = samples.fold(0.0, (s, x) => s + (x - mean) * (x - mean)) / n;
-    final kurtosis = m2 > 1e-12
-        ? (samples.fold(0.0, (s, x) {
-              final d = x - mean;
-              return s + d * d * d * d;
-            }) /
-                n /
-                (m2 * m2)) -
-            3.0
-        : 0.0;
+    final zeroCrossingRate = crossings / (n * dt);
 
     return FeatureResult(
       iqr: iqr,
       zeroCrossingRate: zeroCrossingRate,
       cav: cav,
-      peakAcceleration: peakAcceleration,
+      peakAcceleration: peak,
       kurtosis: kurtosis,
     );
   }

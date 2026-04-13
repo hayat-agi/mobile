@@ -10,6 +10,9 @@ class EarthquakeConfig {
   /// Accelerometer sampling interval (25 Hz = 40 ms per sample).
   static const Duration samplingInterval = Duration(milliseconds: 40);
 
+  /// Sampling interval in seconds, derived from [samplingInterval].
+  static const double samplingIntervalSeconds = 40 / 1000.0;
+
   /// Samples per second derived from [samplingInterval].
   static const int samplesPerSecond = 25;
 
@@ -26,10 +29,9 @@ class EarthquakeConfig {
   static const int ltaWindowSamples = samplesPerSecond * ltaWindowSeconds;
 
   /// STA/LTA ratio threshold that flags a suspicious event.
-  /// Raised from 2.5 to 3.0 to focus on stronger earthquakes and reduce false
-  /// positives. Strong events at moderate distance produce ratios above 4.0;
-  /// hand-held motion typically peaks around 2.0–2.5.
-  static const double staLtaTriggerThreshold = 3.0;
+  /// Lowered from 3.0 to 2.8 to capture borderline M5+ events whose maxRatio
+  /// reaches ~2.99. Still well above hand-held noise (typically peaks 2.0–2.5).
+  static const double staLtaTriggerThreshold = 2.8;
 
   // ── Rolling-window trigger gate ─────────────────────────────────────────────
   //
@@ -88,9 +90,9 @@ class EarthquakeConfig {
   static const double zcThreshold = 4.0;
 
   /// Cumulative Absolute Velocity threshold (m/s²·s).
-  /// Raised from 0.5 to 0.7 for stronger earthquake focus. Strong events
-  /// easily exceed 1.0; hand-held motion rarely reaches 0.7 in 4s.
-  static const double cavThreshold = 0.7;
+  /// Lowered from 0.70 to 0.55 to capture BALB-station M5+ events that produce
+  /// CAV 0.62–0.68. Still well above typical daily-activity noise levels.
+  static const double cavThreshold = 0.55;
 
   // ── Stationarity Gate ────────────────────────────────────────────────────────
   //
@@ -107,7 +109,8 @@ class EarthquakeConfig {
   /// Maximum variance of net-acceleration (m/s²) to consider the phone "still".
   /// Below this → phone is on a stable surface → detection is meaningful.
   /// Above this → phone is likely hand-held/moving → suppress triggers.
-  static const double stationarityVarianceThreshold = 0.005;
+  /// Set to 0.009 to match the MyShake paper value (Kong et al., 2016).
+  static const double stationarityVarianceThreshold = 0.009;
 
   // ── Gyroscope Veto ──────────────────────────────────────────────────────────
   //
@@ -125,16 +128,29 @@ class EarthquakeConfig {
   /// Window for tracking recent peak gyroscope reading (samples at 25 Hz).
   static const int gyroscopeWindowSamples = samplesPerSecond * 2; // 50
 
-  // ── Kurtosis Veto ───────────────────────────────────────────────────────────
+  // ── Kurtosis Vote ────────────────────────────────────────────────────────────
   //
   // Excess kurtosis measures "tailedness" of the acceleration distribution.
   //   Gaussian (sustained shaking) ≈ 0
   //   Impulsive human activity (tap, knock, single jerk) → high kurtosis (> 5)
   //
-  // Applied as a veto in the feature layer: if kurtosis is too high, reject.
+  // Previously applied as a hard veto; now the 4th metric in the 2-of-4 vote.
+  // Low kurtosis votes FOR detection (sustained shaking ≈ Gaussian); high
+  // kurtosis (impulsive human motion) simply loses this one vote.
 
-  /// Maximum excess kurtosis before the feature layer vetoes the detection.
-  static const double kurtosisVetoThreshold = 6.0;
+  /// Kurtosis threshold used as the 4th vote in the 2-of-4 feature check.
+  /// A sample with kurtosis < this value votes for earthquake (sustained,
+  /// near-Gaussian shaking). A sample above this loses the kurtosis vote but
+  /// can still trigger if two other metrics pass — it is no longer a hard veto.
+  static const double kurtosisVoteThreshold = 60.0;
+
+  // ── Post-trigger collection ──────────────────────────────────────────────────
+
+  /// After STA/LTA fires, collect this many more samples before evaluating
+  /// Layer 2 so the feature window contains actual earthquake energy, not
+  /// pre-event quiet noise (MyShake approach).
+  /// 25 samples = 1 second at 25 Hz.
+  static const int postTriggerCollectionSamples = samplesPerSecond * 1; // 25
 
   // ── LTA Stability Guard ─────────────────────────────────────────────────────
   //

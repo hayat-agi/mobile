@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:math' as math;
 
 import '../earthquake_config.dart';
 
@@ -31,7 +32,7 @@ class StationarityDetector {
     if (_buffer.isEmpty) return double.infinity;
     final n = _buffer.length;
     final mean = _sum / n;
-    return (_sumSq / n) - (mean * mean);
+    return math.max(0.0, (_sumSq / n) - (mean * mean));
   }
 
   /// Feed a new net-acceleration magnitude (|√(x²+y²+z²) − 9.81|).

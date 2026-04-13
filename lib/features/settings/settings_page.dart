@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../core/widgets/app_scaffold.dart';
@@ -9,6 +11,8 @@ import '../../core/theme/app_typography.dart';
 import '../../core/auth/auth_service.dart';
 import '../../core/routing/app_router.dart';
 import '../earthquake_detection/earthquake_detection_service.dart';
+import '../earthquake_detection/earthquake_debug_info.dart';
+import '../earthquake_detection/earthquake_config.dart';
 import '../disaster_mode/models/user_health_profile.dart';
 import '../user_profile/services/vulnerable_group_service.dart';
 
@@ -554,6 +558,29 @@ class _SettingsPageState extends State<SettingsPage> {
             },
           ),
           const Divider(height: 1),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.sm,
+            ),
+            leading: Icon(
+              Icons.back_hand_outlined,
+              color: theme.colorScheme.primary,
+            ),
+            title: Text(
+              'El Sallama Testi',
+              style: AppTypography.titleMedium(context),
+            ),
+            subtitle: Text(
+              'Yanlış alarm korumasını gerçek zamanlı doğrula',
+              style: AppTypography.bodySmall(context).copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            trailing: Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+            onTap: _startHandShakeTest,
+          ),
+          const Divider(height: 1),
 
           const SizedBox(height: AppSpacing.xl),
         ],
@@ -600,6 +627,20 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  void _startHandShakeTest() {
+    final service = EarthquakeDetectionService();
+    service.debugForceFeatures = true;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _HandShakeTestSheet(service: service),
+    ).whenComplete(() {
+      service.debugForceFeatures = false;
+    });
+  }
+
   void _showLogoutDialog() {
     showDialog(
       context: context,
@@ -629,6 +670,280 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Hand-Shake Test Bottom Sheet ─────────────────────────────────────────────
+
+class _HandShakeTestSheet extends StatefulWidget {
+  const _HandShakeTestSheet({required this.service});
+  final EarthquakeDetectionService service;
+
+  @override
+  State<_HandShakeTestSheet> createState() => _HandShakeTestSheetState();
+}
+
+class _HandShakeTestSheetState extends State<_HandShakeTestSheet> {
+  EarthquakeDebugInfo? _latest;
+  StreamSubscription<EarthquakeDebugInfo>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = widget.service.debugStream.listen((info) {
+      if (mounted) setState(() => _latest = info);
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  Widget _metricRow(String label, String value, bool isGood) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(label, style: const TextStyle(fontSize: 13)),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: isGood
+                  ? Colors.green.withValues(alpha: 0.15)
+                  : Colors.red.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              isGood ? 'İYİ' : 'UYARI',
+              style: TextStyle(
+                color: isGood ? Colors.green.shade700 : Colors.red.shade700,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _blockReasonLabel(EarthquakeBlockReason? reason) {
+    if (reason == null) return 'YOK (Layer 2 çalıştı)';
+    switch (reason) {
+      case EarthquakeBlockReason.stationarity:
+        return 'Durağanlık ✓';
+      case EarthquakeBlockReason.gyroscope:
+        return 'Jiroskop ✓';
+      case EarthquakeBlockReason.triggerGate:
+        return 'Tetik kapısı ✓';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final info = _latest;
+
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.70,
+      child: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Drag handle
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 4),
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            // Title + subtitle
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'El Sallama Testi',
+                    style: AppTypography.titleMedium(context).copyWith(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Telefonu sallayın — filtreler doğruysa tüm metrikler FAIL göstermeli',
+                    style: AppTypography.bodySmall(context).copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 16),
+            // Content
+            Expanded(
+              child: info == null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Sallayın veya dokunun\u2026',
+                            style: AppTypography.bodySmall(context).copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Block reason row
+                              Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 6),
+                                child: Row(
+                                  children: [
+                                    const Expanded(
+                                      flex: 2,
+                                      child: Text(
+                                        'Engel',
+                                        style: TextStyle(fontSize: 13),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      flex: 3,
+                                      child: Text(
+                                        _blockReasonLabel(info.blockReason),
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: info.blockReason == null
+                                              ? Colors.amber.shade700
+                                              : Colors.green.shade700,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Divider(height: 12),
+                              // STA/LTA row
+                              _metricRow(
+                                'STA/LTA',
+                                '${info.staLtaRatio.toStringAsFixed(3)}  (eşik: ${EarthquakeConfig.staLtaTriggerThreshold})',
+                                info.staLtaRatio < EarthquakeConfig.staLtaTriggerThreshold,
+                              ),
+                              if (info.features != null) ...[
+                                const Divider(height: 12),
+                                _metricRow(
+                                  'IQR',
+                                  '${info.features!.iqr.toStringAsFixed(4)}  (eşik: ${EarthquakeConfig.iqrThreshold})',
+                                  info.features!.iqr < EarthquakeConfig.iqrThreshold,
+                                ),
+                                _metricRow(
+                                  'ZC Oranı',
+                                  '${info.features!.zeroCrossingRate.toStringAsFixed(3)} Hz  (eşik: ${EarthquakeConfig.zcThreshold})',
+                                  info.features!.zeroCrossingRate < EarthquakeConfig.zcThreshold,
+                                ),
+                                _metricRow(
+                                  'CAV',
+                                  '${info.features!.cav.toStringAsFixed(4)} m/s\u00b2\u00b7s  (eşik: ${EarthquakeConfig.cavThreshold})',
+                                  info.features!.cav < EarthquakeConfig.cavThreshold,
+                                ),
+                                _metricRow(
+                                  'Kurtosis',
+                                  '${info.features!.kurtosis.toStringAsFixed(2)}  (eşik: ${EarthquakeConfig.kurtosisVoteThreshold})',
+                                  info.features!.kurtosis >= EarthquakeConfig.kurtosisVoteThreshold,
+                                ),
+                                const Divider(height: 12),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      const Expanded(
+                                        flex: 2,
+                                        child: Text(
+                                          'Sonuç',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      Expanded(
+                                        flex: 4,
+                                        child: Text(
+                                          info.features!.isEarthquake
+                                              ? 'DEPREM'
+                                              : 'İnsan hareketi',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: info.features!.isEarthquake
+                                                ? Colors.red.shade700
+                                                : Colors.green.shade700,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+            // Close button
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                8,
+                20,
+                MediaQuery.of(context).viewInsets.bottom + 16,
+              ),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Kapat'),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

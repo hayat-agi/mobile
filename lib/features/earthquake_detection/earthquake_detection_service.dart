@@ -6,11 +6,13 @@ import 'package:flutter/foundation.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import 'earthquake_config.dart';
+import 'earthquake_debug_info.dart';
 import 'earthquake_state.dart';
 import 'replay_accelerometer_stream.dart';
 import 'algorithms/feature_extractor.dart';
 import 'algorithms/sta_lta.dart';
 import 'algorithms/stationarity_detector.dart';
+import '../ble/sensor_packet.dart';
 
 /// Singleton service that monitors the phone accelerometer for seismic activity.
 ///
@@ -48,6 +50,16 @@ class EarthquakeDetectionService {
   Stream<EarthquakeEvent> get detectionStream => _detectionController.stream;
   final _detectionController = StreamController<EarthquakeEvent>.broadcast();
 
+  /// Stream that emits a debug snapshot every time the feature layer is
+  /// evaluated or blocked. Subscribe in debug/test pages to see live values.
+  Stream<EarthquakeDebugInfo> get debugStream => _debugController.stream;
+  final _debugController = StreamController<EarthquakeDebugInfo>.broadcast();
+
+  /// When true, feature extraction runs even when blocked by stationarity or
+  /// gyroscope pre-filters. The result is emitted on [debugStream] but does
+  /// NOT trigger detection. Use this to capture hand-shake feature values.
+  bool debugForceFeatures = false;
+
   // ── Debug / diagnostics ──────────────────────────────────────────────────
 
   /// Current STA/LTA ratio — useful for live debug display.
@@ -60,8 +72,13 @@ class EarthquakeDetectionService {
   StreamSubscription<AccelerometerEvent>? _sensorSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroSubscription;
   StreamSubscription<AccelerometerEvent>? _replaySubscription;
+
+  /// Active subscription to an external [SensorPacket] stream (ESP32 MPU-6050).
+  /// Non-null only while [startExternal] is active.
+  StreamSubscription<SensorPacket>? _externalSubscription;
   Timer? _cooldownTimer;
   bool _inCooldown = false;
+  bool get _usingExternalStream => _externalSubscription != null;
 
   /// Rolling window of booleans: was STA/LTA above threshold for each sample?
   /// Maintained at a fixed size of [EarthquakeConfig.triggerWindowSamples].
@@ -71,15 +88,25 @@ class EarthquakeDetectionService {
   int _triggerWindowAboveCount = 0;
 
   // ── Gyroscope tracking ───────────────────────────────────────────────────
-  /// Rolling window of gyroscope magnitudes for recent-peak tracking.
-  final Queue<double> _gyroWindow = Queue<double>();
-  double _recentMaxGyro = 0.0;
+  final Queue<bool> _gyroAboveWindow = Queue<bool>();
+  int _gyroAboveCount = 0;
+
+  // ── Post-trigger collection ──────────────────────────────────────────────
+  bool _collectingPostTrigger = false;
+  int _postTriggerSampleCount = 0;
+
+  bool _disposed = false;
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
   /// Start accelerometer monitoring. Safe to call multiple times (idempotent).
   void start() {
-    if (monitorState.value != EarthquakeMonitorState.idle) return;
+    if (_usingExternalStream) return;
+
+    _sensorSubscription?.cancel();
+    _sensorSubscription = null;
+    _gyroSubscription?.cancel();
+    _gyroSubscription = null;
 
     _sensorSubscription = accelerometerEventStream(
       samplingPeriod: EarthquakeConfig.samplingInterval,
@@ -120,8 +147,10 @@ class EarthquakeDetectionService {
     _inCooldown = false;
     _triggerWindow.clear();
     _triggerWindowAboveCount = 0;
-    _gyroWindow.clear();
-    _recentMaxGyro = 0.0;
+    _gyroAboveWindow.clear();
+    _gyroAboveCount = 0;
+    _collectingPostTrigger = false;
+    _postTriggerSampleCount = 0;
     _staLta.reset();
     _stationarity.reset();
     _featureBuffer.clear();
@@ -130,40 +159,109 @@ class EarthquakeDetectionService {
     debugPrint('EarthquakeDetectionService: stopped');
   }
 
+  /// Switch the detection pipeline to use an external MPU-6050 sensor stream
+  /// delivered over BLE from the ESP32.
+  ///
+  /// Cancels the phone accelerometer and gyroscope subscriptions so the phone
+  /// sensor does not compete with the external stream. The full STA/LTA +
+  /// feature extraction pipeline continues to run on the incoming packets.
+  ///
+  /// Call [stopExternal] to revert to phone sensors.
+  void startExternal(Stream<SensorPacket> stream) {
+    stopReplay();
+    _cooldownTimer?.cancel();
+    _cooldownTimer = null;
+    _inCooldown = false;
+
+    // Cancel phone sensor subscriptions — we're now using the ESP32
+    _sensorSubscription?.cancel();
+    _sensorSubscription = null;
+    _gyroSubscription?.cancel();
+    _gyroSubscription = null;
+
+    // Cancel any prior external subscription
+    _externalSubscription?.cancel();
+    _externalSubscription = null;
+
+    // Reset pipeline state for a clean start
+    _staLta.reset();
+    _stationarity.reset();
+    _featureBuffer.clear();
+    _triggerWindow.clear();
+    _triggerWindowAboveCount = 0;
+    _gyroAboveWindow.clear();
+    _gyroAboveCount = 0;
+
+    _externalSubscription = stream.listen(
+      (packet) {
+        _onRawAccel(packet.ax, packet.ay, packet.az);
+        _onRawGyro(packet.gx, packet.gy, packet.gz);
+      },
+      onError: (Object e) {
+        debugPrint('EarthquakeDetectionService: external stream error: $e');
+        stopExternal();
+      },
+      cancelOnError: false,
+    );
+
+    monitorState.value = EarthquakeMonitorState.monitoring;
+    debugPrint('EarthquakeDetectionService: started with external ESP32 sensor stream');
+  }
+
+  /// Revert from external ESP32 sensor stream back to the phone's built-in sensors.
+  ///
+  /// Cancels the external subscription and restarts phone sensor monitoring.
+  /// Safe to call when no external stream is active (no-op in that case).
+  void stopExternal() {
+    if (!_usingExternalStream) return;
+
+    _externalSubscription?.cancel();
+    _externalSubscription = null;
+    debugPrint('EarthquakeDetectionService: external stream stopped, reverting to phone sensors');
+
+    // Restart phone sensor monitoring from scratch
+    monitorState.value = EarthquakeMonitorState.idle;
+    start();
+  }
+
   /// Release all resources. Call only when the service will never be used again.
   void dispose() {
+    _disposed = true;
+    _externalSubscription?.cancel();
+    _externalSubscription = null;
     stop();
     _detectionController.close();
+    _debugController.close();
     isReplaying.dispose();
   }
 
   // ── Gyroscope processing ──────────────────────────────────────────────────
 
   void _onGyroSample(GyroscopeEvent event) {
-    final magnitude =
-        math.sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+    _onRawGyro(event.x, event.y, event.z);
+  }
 
-    _gyroWindow.addLast(magnitude);
-    if (_gyroWindow.length > EarthquakeConfig.gyroscopeWindowSamples) {
-      _gyroWindow.removeFirst();
-    }
+  void _onRawGyro(double x, double y, double z) {
+    final magnitude = math.sqrt(x * x + y * y + z * z);
+    final isAbove = magnitude > EarthquakeConfig.gyroscopeVetoThreshold;
 
-    // Track rolling max over the window
-    if (magnitude > _recentMaxGyro) {
-      _recentMaxGyro = magnitude;
-    } else if (_gyroWindow.length == EarthquakeConfig.gyroscopeWindowSamples) {
-      // Recompute max when window is full (expired old max may have left)
-      _recentMaxGyro = _gyroWindow.fold(0.0, math.max);
+    if (isAbove) _gyroAboveCount++;
+    _gyroAboveWindow.addLast(isAbove);
+    if (_gyroAboveWindow.length > EarthquakeConfig.gyroscopeWindowSamples) {
+      if (_gyroAboveWindow.removeFirst()) _gyroAboveCount--;
     }
   }
 
   // ── Sample processing ────────────────────────────────────────────────────
 
   void _onSample(AccelerometerEvent event) {
+    _onRawAccel(event.x, event.y, event.z);
+  }
+
+  void _onRawAccel(double x, double y, double z) {
     if (_inCooldown) return;
 
-    final magnitude =
-        math.sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+    final magnitude = math.sqrt(x * x + y * y + z * z);
     final netAcc = (magnitude - 9.81).abs();
 
     // ── Pre-filter: Stationarity Gate ──────────────────────────────────────
@@ -171,8 +269,8 @@ class EarthquakeDetectionService {
     _stationarity.addSample(netAcc);
 
     // Layer 1: feed into STA/LTA (always, so it tracks the signal)
-    final ratio = _staLta.addSample(event.x, event.y, event.z);
-    currentRatio.value = ratio;
+    final ratio = _staLta.addSample(x, y, z);
+    if (ratio != currentRatio.value) currentRatio.value = ratio;
 
     // Maintain rolling feature buffer (4-second window)
     _featureBuffer.addLast(netAcc);
@@ -183,11 +281,31 @@ class EarthquakeDetectionService {
     // ── Pre-filter check: phone must be stationary ─────────────────────────
     // During replay tests stationarity is always true (CSV = still phone).
     // On a real device, this blocks triggers when phone is hand-held.
-    if (!isReplaying.value && !_stationarity.isStationary) {
+    if (!isReplaying.value && !_usingExternalStream && !_stationarity.isStationary) {
       // Phone is not still — don't evaluate triggers but keep feeding data.
       if (monitorState.value == EarthquakeMonitorState.suspicious) {
         monitorState.value = EarthquakeMonitorState.monitoring;
         _staLta.unfreezeLta();
+      }
+      _collectingPostTrigger = false;
+      _postTriggerSampleCount = 0;
+      // Debug: emit with blockReason even if pre-filter blocked
+      if (debugForceFeatures && !_debugController.isClosed) {
+        final samples = _featureBuffer.toList();
+        final features = samples.length >= 10 ? FeatureExtractor.analyze(samples) : null;
+        final debugInfo = EarthquakeDebugInfo(
+          timestamp: DateTime.now(),
+          source: EarthquakeDebugSource.live,
+          staLtaRatio: ratio,
+          stationarityVariance: _stationarity.currentVariance,
+          peakGyroMagnitude: _gyroAboveCount > 0
+              ? EarthquakeConfig.gyroscopeVetoThreshold + 0.01
+              : 0.0,
+          blockReason: EarthquakeBlockReason.stationarity,
+          features: features,
+        );
+        _debugController.add(debugInfo);
+        debugPrint(debugInfo.thresholdReport);
       }
       return;
     }
@@ -195,11 +313,27 @@ class EarthquakeDetectionService {
     // ── Pre-filter check: gyroscope veto ───────────────────────────────────
     // Earthquakes = translational only. Human handling = rotational.
     // Skip this check during replay (no gyro data in CSV).
-    if (!isReplaying.value &&
-        _recentMaxGyro > EarthquakeConfig.gyroscopeVetoThreshold) {
+    if (!isReplaying.value && !_usingExternalStream && _gyroAboveCount > 0) {
       if (monitorState.value == EarthquakeMonitorState.suspicious) {
         monitorState.value = EarthquakeMonitorState.monitoring;
         _staLta.unfreezeLta();
+      }
+      _collectingPostTrigger = false;
+      _postTriggerSampleCount = 0;
+      if (debugForceFeatures && !_debugController.isClosed) {
+        final samples = _featureBuffer.toList();
+        final features = samples.length >= 10 ? FeatureExtractor.analyze(samples) : null;
+        final debugInfo = EarthquakeDebugInfo(
+          timestamp: DateTime.now(),
+          source: EarthquakeDebugSource.live,
+          staLtaRatio: ratio,
+          stationarityVariance: _stationarity.currentVariance,
+          peakGyroMagnitude: EarthquakeConfig.gyroscopeVetoThreshold + 0.01,
+          blockReason: EarthquakeBlockReason.gyroscope,
+          features: features,
+        );
+        _debugController.add(debugInfo);
+        debugPrint(debugInfo.thresholdReport);
       }
       return;
     }
@@ -226,19 +360,54 @@ class EarthquakeDetectionService {
         monitorState.value = EarthquakeMonitorState.monitoring;
         _staLta.unfreezeLta();
       }
+      _collectingPostTrigger = false;
+      _postTriggerSampleCount = 0;
       return;
     }
 
-    // Enough sustained activity — freeze LTA so event energy does not inflate LTA
+    // Freeze LTA immediately to prevent event energy inflating the baseline.
     _staLta.freezeLta();
-
-    // Enough sustained activity — run Layer 2 feature analysis
     monitorState.value = EarthquakeMonitorState.suspicious;
+
+    // Post-trigger collection: wait 1 more second so the feature buffer
+    // contains actual earthquake energy rather than pre-event quiet noise.
+    if (!_collectingPostTrigger) {
+      _collectingPostTrigger = true;
+      _postTriggerSampleCount = 0;
+    }
+
+    _postTriggerSampleCount++;
+    if (_postTriggerSampleCount < EarthquakeConfig.postTriggerCollectionSamples) {
+      return; // still collecting — keep feeding data into _featureBuffer
+    }
+
+    // 1-second post-trigger window collected — run Layer 2 on the enriched buffer
+    _collectingPostTrigger = false;
+    _postTriggerSampleCount = 0;
+
     final samples = _featureBuffer.toList();
     final features = FeatureExtractor.analyze(samples);
 
+    // Debug emit — always, for both replay and live
+    if (!_debugController.isClosed) {
+      final debugInfo = EarthquakeDebugInfo(
+        timestamp: DateTime.now(),
+        source: isReplaying.value
+            ? EarthquakeDebugSource.replay
+            : EarthquakeDebugSource.live,
+        staLtaRatio: ratio,
+        stationarityVariance: _stationarity.currentVariance,
+        peakGyroMagnitude: null, // passed gyro gate
+        blockReason: features == null ? EarthquakeBlockReason.triggerGate : null,
+        features: features,
+      );
+      _debugController.add(debugInfo);
+      debugPrint(debugInfo.thresholdReport);
+    }
+
     if (features == null || !features.isEarthquake) {
       monitorState.value = EarthquakeMonitorState.monitoring;
+      _staLta.unfreezeLta();
       return;
     }
 
@@ -269,6 +438,8 @@ class EarthquakeDetectionService {
     _inCooldown = true;
     _triggerWindow.clear();
     _triggerWindowAboveCount = 0;
+    _collectingPostTrigger = false;
+    _postTriggerSampleCount = 0;
     monitorState.value = EarthquakeMonitorState.cooldown;
     _staLta.reset();
     _stationarity.reset();
@@ -303,16 +474,16 @@ class EarthquakeDetectionService {
     _inCooldown = false;
     _cooldownTimer?.cancel();
 
-    isReplaying.value = true;
+    if (!_disposed) isReplaying.value = true;
 
     _replaySubscription = ReplayAccelerometerStream.fromAsset(assetPath).listen(
       _onSample,
       onError: (Object e) {
         debugPrint('EarthquakeDetectionService replay error: $e');
-        isReplaying.value = false;
+        if (!_disposed) isReplaying.value = false;
       },
       onDone: () {
-        isReplaying.value = false;
+        if (!_disposed) isReplaying.value = false;
         debugPrint('EarthquakeDetectionService: replay finished');
       },
       cancelOnError: false,
@@ -323,6 +494,6 @@ class EarthquakeDetectionService {
   void stopReplay() {
     _replaySubscription?.cancel();
     _replaySubscription = null;
-    isReplaying.value = false;
+    if (!_disposed) isReplaying.value = false;
   }
 }
