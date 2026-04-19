@@ -431,6 +431,14 @@ private:
       return;
     }
 
+    if (input.rfind("REGISTER:", 0) == 0) {
+      std::string id = input.substr(9);
+      bool added = nvsRegisterDevice(id.c_str());
+      Serial.printf("[REG] %s\n", added ? "New device registered" : "Already registered (no-op)");
+      queueTxMessage("MSG_OK");
+      return;
+    }
+
     if (input == "FACTORY_RESET") {
       nvsClearDeviceRegistry();
       nvsSaveActivated(false);
