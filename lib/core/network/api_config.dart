@@ -22,6 +22,8 @@ class ApiConfig {
       '/gateways/$gatewayId/citizens/$personId';
   static String removePet(String gatewayId, String petId) =>
       '/gateways/$gatewayId/pets/$petId';
+  static String gatewayDisasterEvents(String id) => '/gateways/$id/disaster-events';
+  static String updateGateway(String id) => '/gateways/$id';
 
   // Metadata
   static const String systemOptions = '/metadata/system-options';

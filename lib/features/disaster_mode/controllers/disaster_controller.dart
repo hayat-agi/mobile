@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import '../models/disaster_enums.dart';
 import '../models/triage_payload.dart';
@@ -7,6 +8,7 @@ import '../models/user_health_profile.dart';
 import '../models/disaster_message_packet.dart';
 import '../../ble/ble_service.dart';
 import '../../../services/gateway_service.dart';
+import '../../../core/api/disaster_repository.dart';
 import '../../user_profile/services/vulnerable_group_service.dart';
 
 /// Controller for the disaster-mode screen.
@@ -300,6 +302,26 @@ class DisasterController extends GetxController {
       await _bleService.sendBinaryQueued(packet.encode());
       lastSendSuccess.value = true;
       _startDebounce();
+
+      final gatewayId = savedGateways.isNotEmpty ? savedGateways.first.id : null;
+      if (gatewayId != null) {
+        DisasterRepository().reportDisasterEvent(gatewayId, {
+          'type': 'triage_status',
+          'triageScore': triageScore.value,
+          'triageStatus': selectedStatus.value?.name,
+          'severityNibble': (triageScore.value / 17).round().clamp(0, 15),
+          'injuryFlags': _buildInjuryFlags(),
+          'situationFlags': _buildSituationFlags(),
+          'needsFlags': _buildNeedsFlags(),
+          'peopleFlags': _buildPeopleFlags(),
+          'adultCount': adultCount.value,
+          'childCount': childCount.value,
+          'sentAt': DateTime.now().toIso8601String(),
+        }).catchError((Object e) {
+          debugPrint('DisasterController: backend sync failed — $e');
+        });
+      }
+
       return true;
     } catch (e) {
       lastSendSuccess.value = false;
@@ -383,6 +405,20 @@ class DisasterController extends GetxController {
         messageText: text.trim(),
       );
       await _bleService.sendBinaryQueued(packet.encode());
+
+      final gatewayId = savedGateways.isNotEmpty ? savedGateways.first.id : null;
+      if (gatewayId != null) {
+        DisasterRepository().reportDisasterEvent(gatewayId, {
+          'type': 'manual_message',
+          'message': text.trim(),
+          'triageScore': triageScore.value,
+          'triageStatus': selectedStatus.value?.name,
+          'sentAt': DateTime.now().toIso8601String(),
+        }).catchError((Object e) {
+          debugPrint('DisasterController: backend sync failed — $e');
+        });
+      }
+
       return true;
     } catch (_) {
       return false;

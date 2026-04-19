@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/gateway.dart';
 import '../models/household_profile.dart';
 import '../features/ble/ble_service.dart';
+import '../core/api/disaster_repository.dart';
 import 'device_password_service.dart';
 
 class GatewayService {
@@ -283,6 +284,10 @@ class GatewayService {
       final deviceCount = await _bleService.queryDeviceCount();
       if (deviceCount != null) {
         updateGatewayDeviceCount(gatewayId, deviceCount);
+        DisasterRepository().updateGatewayStats(gatewayId, deviceCount: deviceCount)
+            .catchError((Object e) {
+          debugPrint('GatewayService: backend device count sync failed — $e');
+        });
       }
     } catch (e) {
       debugPrint('GatewayService: Connection failed — $e');
@@ -404,6 +409,26 @@ class GatewayService {
     if (locationCheckNeeded.value == gatewayId) {
       locationCheckNeeded.value = null;
     }
+  }
+
+  /// Syncs the gateway's GPS coordinates to the backend after a UI-layer location check.
+  /// Fire-and-forget: exceptions are caught and logged, never rethrown.
+  void syncLocationToBackend(
+    String gatewayId,
+    double lat,
+    double lng,
+    String? address,
+  ) {
+    DisasterRepository()
+        .updateGatewayStats(
+          gatewayId,
+          latitude: lat,
+          longitude: lng,
+          locationAddress: address,
+        )
+        .catchError((Object e) {
+      debugPrint('GatewayService: backend location sync failed — $e');
+    });
   }
 
   void dispose() {
