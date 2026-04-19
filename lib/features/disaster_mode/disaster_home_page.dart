@@ -7,31 +7,22 @@ import 'package:speech_to_text/speech_to_text.dart';
 import 'package:torch_light/torch_light.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'controllers/disaster_controller.dart';
-import 'models/disaster_enums.dart';
-import 'widgets/status_action_button.dart';
-import 'widgets/smart_chip_selector.dart';
-import 'widgets/triage_score_display.dart';
 import 'widgets/pfa_support_overlay.dart';
 import 'services/pfa_message_service.dart';
 import 'services/battery_optimization_service.dart';
 import 'data/pfa_messages.dart';
 import '../user_profile/services/vulnerable_group_service.dart';
-import '../../core/routing/app_router.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_colors.dart';
 import '../ble/ble_service.dart';
 
 /// Disaster Mode — CRITICAL screen.
 ///
-/// True-black UI with:
-///   • Three long-press status buttons (Yaralıyım / Mahsurum / Güvendeyim)
-///   • Context-sensitive smart chips (injury, situation, needs, people)
-///   • Real-time triage score display
-///   • Bitmask payload sent via BLE
-///   • 15-minute debounce between sends
-///   • Voice-to-text message input
-///   • Flashlight SOS beacon (morse ··· — — — ···)
-///   • Audio beacon (TTS "YARDIM!" every 30s)
+/// Simplified layout with exactly three interactive elements:
+///   • Message text input (with send button)
+///   • Voice-to-text microphone button
+///   • SOS button — triggers flashlight morse beacon (··· — — — ···)
+///     AND audio beacon ("YARDIM!" every 30s) simultaneously
 class DisasterHomePage extends StatefulWidget {
   const DisasterHomePage({super.key, this.autoTriggered = false});
 
@@ -45,7 +36,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   late final DisasterController _ctrl;
   final _manualTextController = TextEditingController();
 
-  // ── PFA overlay ───────────────────────────────────────────────────
+  // ── PFA overlay (background — no UI trigger) ──────────────────────
   PfaMessage? _pfaMessage;
   bool _isVulnerableProfile = false;
 
@@ -54,12 +45,14 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   bool _speechAvailable = false;
   bool _isListening = false;
 
-  // ── Flashlight SOS ────────────────────────────────────────────────
+  // ── SOS beacon state (flashlight + audio combined) ─────────────────
+  bool _isSosActive = false;
+
+  // ── Flashlight ────────────────────────────────────────────────────
   bool _isFlashlightActive = false;
 
   // ── Audio beacon (TTS) ────────────────────────────────────────────
   final _tts = FlutterTts();
-  bool _isSoundActive = false;
   Timer? _soundTimer;
 
   @override
@@ -67,7 +60,6 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     super.initState();
     _ctrl = Get.put(DisasterController());
 
-    // Activate disaster mode: gateway is released immediately after each send
     BleService().bleConnection.disasterMode = true;
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -97,12 +89,8 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   @override
   void dispose() {
-    // Deactivate disaster mode safely — defers if a queue drain is in progress
     BleService().deactivateDisasterMode();
-
-    // Cancel PFA no-response timer
     PFAMessageService().cancelNoResponseTimer();
-
     _manualTextController.dispose();
 
     // Stop all beacons
@@ -146,7 +134,6 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       return;
     }
 
-    // Request microphone permission
     final micPerm = await Permission.microphone.request();
     if (!micPerm.isGranted) {
       if (mounted) {
@@ -161,7 +148,6 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     }
 
     if (!_speechAvailable) {
-      // Try re-initializing
       await _initSpeech();
       if (!_speechAvailable) {
         if (mounted) {
@@ -189,38 +175,41 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     );
   }
 
-  // ─── Flashlight SOS ────────────────────────────────────────────────
+  // ─── SOS beacon (flashlight + audio combined) ──────────────────────
 
-  Future<void> _toggleFlashlight() async {
-    if (_isFlashlightActive) {
-      setState(() => _isFlashlightActive = false);
+  Future<void> _toggleSos() async {
+    if (_isSosActive) {
+      setState(() {
+        _isSosActive = false;
+        _isFlashlightActive = false;
+      });
       await TorchLight.disableTorch().catchError((_) {});
+      _stopSoundBeacon();
       return;
     }
 
-    // Check if device has a flashlight
+    // Check flashlight availability (non-blocking — continue even if absent)
+    bool hasFlash = false;
     try {
-      final hasFlash = await TorchLight.isTorchAvailable();
-      if (!hasFlash) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Bu cihazda fener bulunamadı'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        return;
-      }
+      hasFlash = await TorchLight.isTorchAvailable();
     } catch (_) {}
 
-    setState(() => _isFlashlightActive = true);
+    setState(() {
+      _isSosActive = true;
+      _isFlashlightActive = hasFlash;
+    });
+
     HapticFeedback.heavyImpact();
-    _runSosPattern(); // runs until _isFlashlightActive = false
+
+    if (hasFlash) {
+      _runSosPattern();
+    }
+    _startSoundBeacon();
   }
 
   /// Repeating SOS morse pattern: ··· — — — ···
-  /// Short = 200ms, Long = 600ms, letter gap = 400ms, word gap = 2000ms
+  /// Short = 200 ms on, Long = 600 ms on, gaps between flashes = 200 ms,
+  /// letter gap = 400 ms, word gap = 2000 ms.
   Future<void> _runSosPattern() async {
     const shortMs = 200;
     const longMs = 600;
@@ -260,17 +249,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   // ─── Audio beacon ──────────────────────────────────────────────────
 
-  Future<void> _toggleSound() async {
-    if (_isSoundActive) {
-      _stopSoundBeacon();
-      return;
-    }
-    setState(() => _isSoundActive = true);
-    HapticFeedback.heavyImpact();
-
-    // Speak immediately, then every 30 seconds
+  Future<void> _startSoundBeacon() async {
     await _speakBeacon();
-    _soundTimer = Timer.periodic(const Duration(seconds: 30), (_) => _speakBeacon());
+    _soundTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _speakBeacon(),
+    );
   }
 
   Future<void> _speakBeacon() async {
@@ -281,10 +265,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     _soundTimer?.cancel();
     _soundTimer = null;
     _tts.stop();
-    setState(() => _isSoundActive = false);
   }
 
-  // ─── PFA helpers ───────────────────────────────────────────────────
+  // ─── PFA helpers (background only — no UI trigger) ─────────────────
 
   void _showPfaMessage(PfaMessage message) {
     if (mounted) setState(() => _pfaMessage = message);
@@ -292,7 +275,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   void _dismissPfa() {
     setState(() => _pfaMessage = null);
-    _startNoResponseTimer(); // restart after dismiss
+    _startNoResponseTimer();
   }
 
   void _startNoResponseTimer() {
@@ -331,7 +314,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     _startNoResponseTimer();
   }
 
-  // ─── Send handlers ─────────────────────────────────────────────────
+  // ─── Send handler ──────────────────────────────────────────────────
 
   Future<void> _onManualSend() async {
     final text = _manualTextController.text.trim();
@@ -369,109 +352,41 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      resizeToAvoidBottomInset: true,
       appBar: _buildAppBar(),
       body: Stack(
         children: [
           SafeArea(
-        child: Obx(() {
-          final status = _ctrl.selectedStatus.value;
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.screenPadding,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: AppSpacing.md),
 
-          return SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.screenPadding,
-              vertical: AppSpacing.md,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Emergency banner
-                _buildEmergencyBanner(),
-                const SizedBox(height: 20),
+                  // Emergency banner
+                  _buildEmergencyBanner(),
 
-                // Status buttons
-                _buildStatusButtons(),
-                const SizedBox(height: 24),
+                  // SOS button — centered and dominant
+                  Expanded(
+                    child: Center(
+                      child: _SosPulseButton(
+                        isActive: _isSosActive,
+                        onTap: _toggleSos,
+                      ),
+                    ),
+                  ),
 
-                // Smart chip sections (context-sensitive)
-                if (status != null) ...[
-                  // Injury chips — only for injured / trapped
-                  if (status != DisasterStatus.safe) ...[
-                    Obx(() => SmartChipSelector<InjuryChip>(
-                          title: 'YARALANMA DURUMU',
-                          chips: InjuryChip.values,
-                          selected: _ctrl.selectedInjuries.toSet(),
-                          labelOf: (c) => c.label,
-                          iconOf: (c) => c.icon,
-                          accentColor: const Color(0xFFEF4444),
-                          onToggle: _ctrl.toggleInjury,
-                        )),
-                    const SizedBox(height: 16),
-
-                    // Situation chips
-                    Obx(() => SmartChipSelector<SituationChip>(
-                          title: 'DURUM',
-                          chips: SituationChip.values,
-                          selected: _ctrl.selectedSituations.toSet(),
-                          labelOf: (c) => c.label,
-                          iconOf: (c) => c.icon,
-                          accentColor: const Color(0xFFF59E0B),
-                          onToggle: _ctrl.toggleSituation,
-                        )),
-                    const SizedBox(height: 16),
-                  ],
-
-                  // Needs chips — all statuses
-                  Obx(() => SmartChipSelector<NeedChip>(
-                        title: 'İHTİYAÇLAR',
-                        chips: NeedChip.values,
-                        selected: _ctrl.selectedNeeds.toSet(),
-                        labelOf: (c) => c.label,
-                        iconOf: (c) => c.icon,
-                        accentColor: const Color(0xFF3B82F6),
-                        onToggle: _ctrl.toggleNeed,
-                      )),
-                  const SizedBox(height: 16),
-
-                  // People chips — all statuses
-                  Obx(() => SmartChipSelector<PeopleChip>(
-                        title: 'KİŞİLER',
-                        chips: PeopleChip.values,
-                        selected: _ctrl.selectedPeople.toSet(),
-                        labelOf: (c) => c.label,
-                        iconOf: (c) => c.icon,
-                        accentColor: const Color(0xFF8B5CF6),
-                        onToggle: _ctrl.togglePeople,
-                      )),
-                  const SizedBox(height: 16),
-
-                  // People count
-                  _buildPeopleCount(),
-                  const SizedBox(height: 24),
-
-                  // Triage score
-                  Obx(() => TriageScoreDisplay(
-                        score: _ctrl.triageScore.value,
-                        category: _ctrl.triageCategory.value,
-                      )),
-                  const SizedBox(height: 24),
-
-                  // Manual text input with voice-to-text
-                  _buildManualTextInput(),
-                  const SizedBox(height: 16),
-
-                  // Messages link
-                  _buildMessagesButton(),
-                  const SizedBox(height: 16),
-
-                  // Flashlight & sound beacons
-                  _buildBeaconSection(),
-                  const SizedBox(height: 24),
+                  // Message input pinned to the bottom
+                  _buildMessageInput(),
+                  const SizedBox(height: AppSpacing.md),
                 ],
-              ],
+              ),
             ),
-          );
-        }),
-      ),
+          ),
+
           // PFA support overlay — rendered on top of all content
           if (_pfaMessage != null)
             Positioned.fill(
@@ -495,9 +410,11 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
         icon: const Icon(Icons.arrow_back, color: Colors.white),
         onPressed: () => Navigator.pop(context),
       ),
-      title: const Text('Afet Modu', style: TextStyle(color: Colors.white)),
+      title: const Text(
+        'Afet Modu',
+        style: TextStyle(color: Colors.white),
+      ),
       actions: [
-        // Live connection indicator
         Obx(() {
           final connected = _ctrl.isConnected;
           return Padding(
@@ -510,10 +427,13 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                   height: 10,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: connected ? AppColors.success : AppColors.danger,
+                    color:
+                        connected ? AppColors.success : AppColors.danger,
                     boxShadow: [
                       BoxShadow(
-                        color: (connected ? AppColors.success : AppColors.danger)
+                        color: (connected
+                                ? AppColors.success
+                                : AppColors.danger)
                             .withValues(alpha: 0.5),
                         blurRadius: 6,
                         spreadRadius: 1,
@@ -525,7 +445,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                 Text(
                   connected ? 'Bağlı' : 'Bağlantı Yok',
                   style: TextStyle(
-                    color: connected ? AppColors.success : Colors.white54,
+                    color: connected
+                        ? AppColors.success
+                        : Colors.white54,
                     fontSize: 12,
                   ),
                 ),
@@ -549,8 +471,11 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.warning_amber_rounded,
-              color: AppColors.danger, size: 28),
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: AppColors.danger,
+            size: 28,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -564,15 +489,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                     fontSize: 16,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Durumunuzu seçin, detayları işaretleyin, gönderin',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
                 if (widget.autoTriggered) ...[
                   const SizedBox(height: 4),
                   const Text(
-                    'Sismik aktivite tespit edildi — durumunuzu seçin',
+                    'Sismik aktivite tespit edildi',
                     style: TextStyle(
                       color: AppColors.warning,
                       fontSize: 12,
@@ -588,82 +508,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     );
   }
 
-  // ─── Status buttons ────────────────────────────────────────────────
+  // ─── Message input row ─────────────────────────────────────────────
 
-  Widget _buildStatusButtons() {
-    return Obx(() {
-      final current = _ctrl.selectedStatus.value;
-
-      return Row(
-        children: DisasterStatus.values.map((status) {
-          final isSelected = current == status;
-          final isOtherSelected = current != null && !isSelected;
-
-          return Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(
-                left: status == DisasterStatus.injured ? 0 : 6,
-                right: status == DisasterStatus.safe ? 0 : 6,
-              ),
-              child: StatusActionButton(
-                label: status.label,
-                subtitle: status.subtitle,
-                icon: status.icon,
-                color: status.color,
-                isSelected: isSelected,
-                isDisabled: isOtherSelected,
-                onConfirmed: () => _ctrl.selectStatus(status),
-                onDeselected: () => _ctrl.clearStatus(),
-              ),
-            ),
-          );
-        }).toList(),
-      );
-    });
-  }
-
-  // ─── People count ──────────────────────────────────────────────────
-
-  Widget _buildPeopleCount() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade900,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          // Adults
-          Expanded(
-            child: Obx(() => _CounterTile(
-                  label: 'Yetişkin',
-                  value: _ctrl.adultCount.value,
-                  onIncrement: _ctrl.incrementAdults,
-                  onDecrement: _ctrl.decrementAdults,
-                )),
-          ),
-          Container(
-            width: 1,
-            height: 40,
-            color: Colors.grey.shade700,
-          ),
-          // Children
-          Expanded(
-            child: Obx(() => _CounterTile(
-                  label: 'Çocuk',
-                  value: _ctrl.childCount.value,
-                  onIncrement: _ctrl.incrementChildren,
-                  onDecrement: _ctrl.decrementChildren,
-                )),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ─── Manual text input with voice-to-text ──────────────────────────
-
-  Widget _buildManualTextInput() {
+  Widget _buildMessageInput() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -679,17 +526,20 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
           Expanded(
             child: TextField(
               controller: _manualTextController,
-              enabled: true,
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
+                hintText:
+                    _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
                 hintStyle: TextStyle(
-                  color: _isListening ? Colors.red.shade300 : Colors.grey.shade500,
+                  color: _isListening
+                      ? Colors.red.shade300
+                      : Colors.grey.shade500,
                   fontSize: 14,
                 ),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                contentPadding:
+                    const EdgeInsets.symmetric(vertical: 10),
               ),
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _onManualSend(),
@@ -739,215 +589,149 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       ),
     );
   }
-
-  // ─── Messages button ───────────────────────────────────────────────
-
-  Widget _buildMessagesButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: OutlinedButton.icon(
-        onPressed: () => Navigator.pushNamed(context, AppRouter.messages),
-        icon: const Icon(Icons.message, size: 20),
-        label: const Text('Mesajlar'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white54,
-          side: BorderSide(color: Colors.grey.shade700),
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ─── Beacon section ────────────────────────────────────────────────
-
-  Widget _buildBeaconSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'KONUM SİNYALİ',
-          style: TextStyle(
-            color: Colors.white38,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 1.2,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            // Flashlight SOS button
-            Expanded(
-              child: _BeaconButton(
-                icon: Icons.flashlight_on,
-                label: 'Fener SOS',
-                sublabel: _isFlashlightActive ? 'AKTİF — ··· — — — ···' : 'Morse kodu',
-                isActive: _isFlashlightActive,
-                activeColor: const Color(0xFFF59E0B),
-                onTap: _toggleFlashlight,
-              ),
-            ),
-            const SizedBox(width: 12),
-
-            // Audio beacon button
-            Expanded(
-              child: _BeaconButton(
-                icon: Icons.campaign,
-                label: 'Ses Sinyali',
-                sublabel: _isSoundActive ? 'AKTİF — her 30s' : '"YARDIM!" sesi',
-                isActive: _isSoundActive,
-                activeColor: const Color(0xFFEF4444),
-                onTap: _toggleSound,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
 }
 
-// ─── Helper: beacon button ───────────────────────────────────────────
+// ─── SOS pulse button ────────────────────────────────────────────────
 
-class _BeaconButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String sublabel;
+/// Large red SOS button. When [isActive] is true it pulses with a
+/// repeating scale + glow animation to signal the beacon is running.
+class _SosPulseButton extends StatefulWidget {
   final bool isActive;
-  final Color activeColor;
   final VoidCallback onTap;
 
-  const _BeaconButton({
-    required this.icon,
-    required this.label,
-    required this.sublabel,
+  const _SosPulseButton({
     required this.isActive,
-    required this.activeColor,
     required this.onTap,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-        decoration: BoxDecoration(
-          color: isActive
-              ? activeColor.withValues(alpha: 0.15)
-              : Colors.grey.shade900,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: isActive ? activeColor : Colors.grey.shade700,
-            width: isActive ? 1.5 : 0.5,
-          ),
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: activeColor.withValues(alpha: 0.3),
-                    blurRadius: 12,
-                    spreadRadius: 1,
-                  )
-                ]
-              : null,
-        ),
-        child: Column(
-          children: [
-            Icon(
-              icon,
-              size: 28,
-              color: isActive ? activeColor : Colors.white38,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: isActive ? activeColor : Colors.white70,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              sublabel,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: isActive ? activeColor.withValues(alpha: 0.8) : Colors.white30,
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  State<_SosPulseButton> createState() => _SosPulseButtonState();
 }
 
-// ─── Helper: counter tile ────────────────────────────────────────────
+class _SosPulseButtonState extends State<_SosPulseButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+  late final Animation<double> _scale;
+  late final Animation<double> _glow;
 
-class _CounterTile extends StatelessWidget {
-  final String label;
-  final int value;
-  final VoidCallback onIncrement;
-  final VoidCallback onDecrement;
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _scale = Tween<double>(begin: 1.0, end: 1.06).animate(
+      CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+    );
+    _glow = Tween<double>(begin: 18.0, end: 42.0).animate(
+      CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+    );
 
-  const _CounterTile({
-    required this.label,
-    required this.value,
-    required this.onIncrement,
-    required this.onDecrement,
-  });
+    if (widget.isActive) {
+      _pulse.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(_SosPulseButton old) {
+    super.didUpdateWidget(old);
+    if (widget.isActive && !old.isActive) {
+      _pulse.repeat(reverse: true);
+    } else if (!widget.isActive && old.isActive) {
+      _pulse.stop();
+      _pulse.animateTo(0.0,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut);
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _circleButton(Icons.remove, onDecrement),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                '$value',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
+    const sosRed = Color(0xFFEF4444);
+    const buttonSize = 180.0;
+
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (context, child) {
+        return GestureDetector(
+          onTap: widget.onTap,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Transform.scale(
+                scale: _scale.value,
+                child: Container(
+                  width: buttonSize,
+                  height: buttonSize,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: widget.isActive
+                        ? sosRed
+                        : sosRed.withValues(alpha: 0.85),
+                    boxShadow: [
+                      BoxShadow(
+                        color: sosRed.withValues(
+                          alpha: widget.isActive ? 0.55 : 0.25,
+                        ),
+                        blurRadius: widget.isActive ? _glow.value : 18.0,
+                        spreadRadius: widget.isActive ? 6.0 : 2.0,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        widget.isActive
+                            ? Icons.sensors
+                            : Icons.sos,
+                        size: 52,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'SOS',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 4,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            _circleButton(Icons.add, onIncrement),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _circleButton(IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
+              const SizedBox(height: 20),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                child: Text(
+                  widget.isActive
+                      ? 'AKTİF — Fener + Ses çalışıyor'
+                      : 'Basarak SOS sinyali gönder',
+                  key: ValueKey(widget.isActive),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: widget.isActive ? sosRed : Colors.white38,
+                    fontSize: 13,
+                    fontWeight: widget.isActive
+                        ? FontWeight.w600
+                        : FontWeight.normal,
+                    letterSpacing: widget.isActive ? 0.5 : 0,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
       },
-      child: Container(
-        width: 32,
-        height: 32,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade600),
-        ),
-        child: Icon(icon, color: Colors.white70, size: 18),
-      ),
     );
   }
 }
