@@ -18,9 +18,10 @@ List<(double, double, double)> _parseCsv(File file) {
     if (t.isEmpty || t.startsWith(RegExp(r'[a-zA-Z]'))) continue;
     final p = t.split(',');
     if (p.length < 3) continue;
-    final x = double.tryParse(p[0]) ?? 0.0;
-    final y = double.tryParse(p[1]) ?? 0.0;
-    final z = double.tryParse(p[2]) ?? 0.0;
+    final x = double.tryParse(p[0]);
+    final y = double.tryParse(p[1]);
+    final z = double.tryParse(p[2]);
+    if (x == null || y == null || z == null) continue;
     samples.add((x, y, z));
   }
   return samples;
@@ -93,9 +94,9 @@ void _printSummaryTable(List<ReplayResult> results) {
   final falsePos = results.where((r) => r.triggered && !_isEarthquakeFixture(r)).length;
   print('');
   print('  TP=$truePos  FN=$falseNeg  TN=$trueNeg  FP=$falsePos');
-  print('  Layer 2: 2-of-3 (IQR≥${EarthquakeConfig.iqrThreshold}, '
-      'ZC≥${EarthquakeConfig.zcThreshold}, CAV≥${EarthquakeConfig.cavThreshold}) '
-      '+ kurt veto >${EarthquakeConfig.kurtosisVetoThreshold}');
+  print('  Layer 2: 2-of-4 vote (IQR≥${EarthquakeConfig.iqrThreshold}, '
+      'ZC≥${EarthquakeConfig.zcThreshold}, CAV≥${EarthquakeConfig.cavThreshold}, '
+      'kurt<${EarthquakeConfig.kurtosisVoteThreshold})');
   print('  STA/LTA≥${EarthquakeConfig.staLtaTriggerThreshold}, '
       'gate ${EarthquakeConfig.minTriggersInWindow}/${EarthquakeConfig.triggerWindowSamples}');
   print('─────────────────────────────────────────────────────────────────────\n');
@@ -153,7 +154,7 @@ void main() {
               '${EarthquakeConfig.triggerWindowSamples} (need '
               '${EarthquakeConfig.minTriggersInWindow})\n'
               '  Best Layer-2 attempt: ${result.bestFeatures}\n'
-              '  Tune earthquake_config.dart or review LTA freeze / 2-of-3 thresholds.',
+              '  Tune earthquake_config.dart or review LTA freeze / 2-of-4 thresholds.',
         );
       });
     }

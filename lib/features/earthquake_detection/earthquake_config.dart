@@ -7,14 +7,18 @@ class EarthquakeConfig {
 
   // ── Sensor ──────────────────────────────────────────────────────────────────
 
+  /// Source-of-truth sampling period in milliseconds. All other timing
+  /// constants derive from this single value — change only this one.
+  static const int _samplingMs = 40;
+
   /// Accelerometer sampling interval (25 Hz = 40 ms per sample).
-  static const Duration samplingInterval = Duration(milliseconds: 40);
+  static const Duration samplingInterval = Duration(milliseconds: _samplingMs);
 
-  /// Sampling interval in seconds, derived from [samplingInterval].
-  static const double samplingIntervalSeconds = 40 / 1000.0;
+  /// Sampling interval in seconds, derived from [_samplingMs].
+  static const double samplingIntervalSeconds = _samplingMs / 1000.0;
 
-  /// Samples per second derived from [samplingInterval].
-  static const int samplesPerSecond = 25;
+  /// Samples per second derived from [_samplingMs].
+  static const int samplesPerSecond = 1000 ~/ _samplingMs;
 
   // ── STA / LTA ───────────────────────────────────────────────────────────────
 
@@ -41,7 +45,7 @@ class EarthquakeConfig {
   // This tolerates brief dips without wiping progress.
   //
   // At 25 Hz:  triggerWindowSamples = 50  →  2-second rolling window
-  //            minTriggersInWindow   = 15  →  30 % of window must be above
+  //            minTriggersInWindow   = 18  →  36 % of window must be above
   //
   // What this produces:
   //   Phone pickup  (~0.3 s, ~7 above/50)  →  14 % → no trigger
@@ -142,7 +146,9 @@ class EarthquakeConfig {
   /// A sample with kurtosis < this value votes for earthquake (sustained,
   /// near-Gaussian shaking). A sample above this loses the kurtosis vote but
   /// can still trigger if two other metrics pass — it is no longer a hard veto.
-  static const double kurtosisVoteThreshold = 60.0;
+  /// Set to 10.0 — above typical human-activity impulsive kurtosis (~5) and
+  /// well below the previous too-permissive value (60), a sensible midpoint.
+  static const double kurtosisVoteThreshold = 10.0;
 
   // ── Post-trigger collection ──────────────────────────────────────────────────
 
@@ -177,7 +183,12 @@ class EarthquakeConfig {
 
   // ── User confirmation ────────────────────────────────────────────────────────
 
+  /// Source-of-truth for the confirmation timeout in seconds.
+  /// Both [confirmationTimeout] and the UI countdown ring derive from this.
+  static const int confirmationTimeoutSeconds = 30;
+
   /// How long to wait for user response before auto-confirming.
   /// Silence = user may be trapped → auto-activate disaster mode.
-  static const Duration confirmationTimeout = Duration(seconds: 30);
+  static const Duration confirmationTimeout =
+      Duration(seconds: confirmationTimeoutSeconds);
 }

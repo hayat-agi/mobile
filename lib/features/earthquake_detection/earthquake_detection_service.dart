@@ -90,6 +90,7 @@ class EarthquakeDetectionService {
   // ── Gyroscope tracking ───────────────────────────────────────────────────
   final Queue<bool> _gyroAboveWindow = Queue<bool>();
   int _gyroAboveCount = 0;
+  double _lastGyroMagnitude = 0.0;
 
   // ── Post-trigger collection ──────────────────────────────────────────────
   bool _collectingPostTrigger = false;
@@ -107,6 +108,15 @@ class EarthquakeDetectionService {
     _sensorSubscription = null;
     _gyroSubscription?.cancel();
     _gyroSubscription = null;
+
+    // Reset pipeline state so stale data from a prior session never bleeds in.
+    _staLta.reset();
+    _stationarity.reset();
+    _featureBuffer.clear();
+    _resetTriggerWindow();
+    _resetGyroWindow();
+    _collectingPostTrigger = false;
+    _postTriggerSampleCount = 0;
 
     _sensorSubscription = accelerometerEventStream(
       samplingPeriod: EarthquakeConfig.samplingInterval,
@@ -145,17 +155,17 @@ class EarthquakeDetectionService {
     _cooldownTimer?.cancel();
     _cooldownTimer = null;
     _inCooldown = false;
-    _triggerWindow.clear();
-    _triggerWindowAboveCount = 0;
-    _gyroAboveWindow.clear();
-    _gyroAboveCount = 0;
+    _resetTriggerWindow();
+    _resetGyroWindow();
     _collectingPostTrigger = false;
     _postTriggerSampleCount = 0;
     _staLta.reset();
     _stationarity.reset();
     _featureBuffer.clear();
-    monitorState.value = EarthquakeMonitorState.idle;
-    currentRatio.value = 0.0;
+    if (!_disposed) {
+      monitorState.value = EarthquakeMonitorState.idle;
+      currentRatio.value = 0.0;
+    }
     debugPrint('EarthquakeDetectionService: stopped');
   }
 
@@ -187,10 +197,8 @@ class EarthquakeDetectionService {
     _staLta.reset();
     _stationarity.reset();
     _featureBuffer.clear();
-    _triggerWindow.clear();
-    _triggerWindowAboveCount = 0;
-    _gyroAboveWindow.clear();
-    _gyroAboveCount = 0;
+    _resetTriggerWindow();
+    _resetGyroWindow();
 
     _externalSubscription = stream.listen(
       (packet) {
@@ -219,6 +227,18 @@ class EarthquakeDetectionService {
     _externalSubscription = null;
     debugPrint('EarthquakeDetectionService: external stream stopped, reverting to phone sensors');
 
+    // Reset pipeline state so ESP32 baseline does not contaminate phone sensors
+    _staLta.reset();
+    _stationarity.reset();
+    _featureBuffer.clear();
+    _resetTriggerWindow();
+    _resetGyroWindow();
+    _collectingPostTrigger = false;
+    _postTriggerSampleCount = 0;
+    _inCooldown = false;
+    _cooldownTimer?.cancel();
+    _cooldownTimer = null;
+
     // Restart phone sensor monitoring from scratch
     monitorState.value = EarthquakeMonitorState.idle;
     start();
@@ -233,6 +253,9 @@ class EarthquakeDetectionService {
     _detectionController.close();
     _debugController.close();
     isReplaying.dispose();
+    monitorState.dispose();
+    lastEvent.dispose();
+    currentRatio.dispose();
   }
 
   // ── Gyroscope processing ──────────────────────────────────────────────────
@@ -243,6 +266,7 @@ class EarthquakeDetectionService {
 
   void _onRawGyro(double x, double y, double z) {
     final magnitude = math.sqrt(x * x + y * y + z * z);
+    _lastGyroMagnitude = magnitude;
     final isAbove = magnitude > EarthquakeConfig.gyroscopeVetoThreshold;
 
     if (isAbove) _gyroAboveCount++;
@@ -259,6 +283,7 @@ class EarthquakeDetectionService {
   }
 
   void _onRawAccel(double x, double y, double z) {
+    if (_disposed) return;
     if (_inCooldown) return;
 
     final magnitude = math.sqrt(x * x + y * y + z * z);
@@ -281,14 +306,15 @@ class EarthquakeDetectionService {
     // ── Pre-filter check: phone must be stationary ─────────────────────────
     // During replay tests stationarity is always true (CSV = still phone).
     // On a real device, this blocks triggers when phone is hand-held.
+    // Stationarity gate: skip for external stream (ESP32 is physically mounted —
+    // always stationary by design; applying the gate would cause a 5-second
+    // blind spot on every session start while the detector's buffer fills).
     if (!isReplaying.value && !_usingExternalStream && !_stationarity.isStationary) {
       // Phone is not still — don't evaluate triggers but keep feeding data.
       if (monitorState.value == EarthquakeMonitorState.suspicious) {
         monitorState.value = EarthquakeMonitorState.monitoring;
         _staLta.unfreezeLta();
       }
-      _collectingPostTrigger = false;
-      _postTriggerSampleCount = 0;
       // Debug: emit with blockReason even if pre-filter blocked
       if (debugForceFeatures && !_debugController.isClosed) {
         final samples = _featureBuffer.toList();
@@ -298,9 +324,7 @@ class EarthquakeDetectionService {
           source: EarthquakeDebugSource.live,
           staLtaRatio: ratio,
           stationarityVariance: _stationarity.currentVariance,
-          peakGyroMagnitude: _gyroAboveCount > 0
-              ? EarthquakeConfig.gyroscopeVetoThreshold + 0.01
-              : 0.0,
+          peakGyroMagnitude: _lastGyroMagnitude,
           blockReason: EarthquakeBlockReason.stationarity,
           features: features,
         );
@@ -313,13 +337,12 @@ class EarthquakeDetectionService {
     // ── Pre-filter check: gyroscope veto ───────────────────────────────────
     // Earthquakes = translational only. Human handling = rotational.
     // Skip this check during replay (no gyro data in CSV).
-    if (!isReplaying.value && !_usingExternalStream && _gyroAboveCount > 0) {
+    if (!isReplaying.value && !_usingExternalStream &&
+        _gyroAboveCount >= (EarthquakeConfig.gyroscopeWindowSamples * 0.20).ceil()) {
       if (monitorState.value == EarthquakeMonitorState.suspicious) {
         monitorState.value = EarthquakeMonitorState.monitoring;
         _staLta.unfreezeLta();
       }
-      _collectingPostTrigger = false;
-      _postTriggerSampleCount = 0;
       if (debugForceFeatures && !_debugController.isClosed) {
         final samples = _featureBuffer.toList();
         final features = samples.length >= 10 ? FeatureExtractor.analyze(samples) : null;
@@ -328,7 +351,7 @@ class EarthquakeDetectionService {
           source: EarthquakeDebugSource.live,
           staLtaRatio: ratio,
           stationarityVariance: _stationarity.currentVariance,
-          peakGyroMagnitude: EarthquakeConfig.gyroscopeVetoThreshold + 0.01,
+          peakGyroMagnitude: _lastGyroMagnitude,
           blockReason: EarthquakeBlockReason.gyroscope,
           features: features,
         );
@@ -428,7 +451,7 @@ class EarthquakeDetectionService {
 
     monitorState.value = EarthquakeMonitorState.confirmed;
     lastEvent.value = event;
-    _detectionController.add(event);
+    if (!_detectionController.isClosed) _detectionController.add(event);
 
     _startCooldown();
     debugPrint('EarthquakeDetectionService: DETECTED — $event');
@@ -436,22 +459,32 @@ class EarthquakeDetectionService {
 
   void _startCooldown() {
     _inCooldown = true;
-    _triggerWindow.clear();
-    _triggerWindowAboveCount = 0;
+    _resetTriggerWindow();
     _collectingPostTrigger = false;
     _postTriggerSampleCount = 0;
-    monitorState.value = EarthquakeMonitorState.cooldown;
-    _staLta.reset();
-    _stationarity.reset();
-    _featureBuffer.clear();
+
+    if (!_disposed) {
+      monitorState.value = EarthquakeMonitorState.cooldown;
+    }
 
     _cooldownTimer?.cancel();
     _cooldownTimer = Timer(EarthquakeConfig.cooldownDuration, () {
       _inCooldown = false;
+      _staLta.unfreezeLta();
       if (monitorState.value == EarthquakeMonitorState.cooldown) {
         monitorState.value = EarthquakeMonitorState.monitoring;
       }
     });
+  }
+
+  void _resetTriggerWindow() {
+    _triggerWindow.clear();
+    _triggerWindowAboveCount = 0;
+  }
+
+  void _resetGyroWindow() {
+    _gyroAboveWindow.clear();
+    _gyroAboveCount = 0;
   }
 
   // ── Replay ───────────────────────────────────────────────────────────────
@@ -469,8 +502,10 @@ class EarthquakeDetectionService {
     _staLta.reset();
     _stationarity.reset();
     _featureBuffer.clear();
-    _triggerWindow.clear();
-    _triggerWindowAboveCount = 0;
+    _resetTriggerWindow();
+    _resetGyroWindow();
+    _collectingPostTrigger = false;
+    _postTriggerSampleCount = 0;
     _inCooldown = false;
     _cooldownTimer?.cancel();
 

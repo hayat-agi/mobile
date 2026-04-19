@@ -33,6 +33,7 @@ class EarthquakeConfirmDialog extends StatefulWidget {
 
 class _EarthquakeConfirmDialogState extends State<EarthquakeConfirmDialog> {
   late int _secondsRemaining;
+  late DateTime _deadline;
   Timer? _countdownTimer;
 
   @override
@@ -43,9 +44,12 @@ class _EarthquakeConfirmDialogState extends State<EarthquakeConfirmDialog> {
 
     HapticFeedback.heavyImpact();
 
+    _deadline = DateTime.now().add(EarthquakeConfig.confirmationTimeout);
+
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-      setState(() => _secondsRemaining--);
+      final remaining = _deadline.difference(DateTime.now()).inSeconds;
+      setState(() => _secondsRemaining = remaining.clamp(0, EarthquakeConfig.confirmationTimeoutSeconds));
       if (_secondsRemaining <= 0) {
         _countdownTimer?.cancel();
         _navigateToDisasterHome();
@@ -187,7 +191,7 @@ class _CountdownRing extends StatelessWidget {
 
   final int seconds;
 
-  static const int _total = 30;
+  static const int _total = EarthquakeConfig.confirmationTimeoutSeconds;
 
   @override
   Widget build(BuildContext context) {

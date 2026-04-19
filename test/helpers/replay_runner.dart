@@ -11,6 +11,7 @@ int _featurePassCount(FeatureResult f) {
   if (f.iqr >= EarthquakeConfig.iqrThreshold) n++;
   if (f.zeroCrossingRate >= EarthquakeConfig.zcThreshold) n++;
   if (f.cav >= EarthquakeConfig.cavThreshold) n++;
+  if (f.kurtosis < EarthquakeConfig.kurtosisVoteThreshold) n++;
   return n;
 }
 
@@ -89,6 +90,8 @@ class ReplayRunner {
     var maxTriggerCount = 0;
     FeatureResult? bestFeatures;
     var bestPassCount = -1;
+    var collectingPostTrigger = false;
+    var postTriggerSampleCount = 0;
 
     for (var i = 0; i < samples.length; i++) {
       final (x, y, z) = samples[i];
@@ -123,11 +126,24 @@ class ReplayRunner {
 
       if (triggerWindowAboveCount < EarthquakeConfig.minTriggersInWindow) {
         staLta.unfreezeLta();
+        collectingPostTrigger = false;
+        postTriggerSampleCount = 0;
         continue;
       }
 
       staLta.freezeLta();
       gateEverMet = true;
+
+      if (!collectingPostTrigger) {
+        collectingPostTrigger = true;
+        postTriggerSampleCount = 0;
+      }
+      postTriggerSampleCount++;
+      if (postTriggerSampleCount < EarthquakeConfig.postTriggerCollectionSamples) {
+        continue;
+      }
+      collectingPostTrigger = false;
+      postTriggerSampleCount = 0;
 
       final features = FeatureExtractor.analyze(featureBuffer.toList());
       if (features != null) {
