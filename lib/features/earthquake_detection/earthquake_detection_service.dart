@@ -284,7 +284,6 @@ class EarthquakeDetectionService {
 
   void _onRawAccel(double x, double y, double z) {
     if (_disposed) return;
-    if (_inCooldown) return;
 
     final magnitude = math.sqrt(x * x + y * y + z * z);
     final netAcc = (magnitude - 9.81).abs();
@@ -302,6 +301,10 @@ class EarthquakeDetectionService {
     if (_featureBuffer.length > EarthquakeConfig.featureWindowSamples) {
       _featureBuffer.removeFirst();
     }
+
+    // During cooldown keep feeding baseline components above so the pipeline
+    // has fresh, accurate state when cooldown ends — but skip trigger logic.
+    if (_inCooldown) return;
 
     // ── Pre-filter check: phone must be stationary ─────────────────────────
     // During replay tests stationarity is always true (CSV = still phone).
@@ -471,6 +474,12 @@ class EarthquakeDetectionService {
     _cooldownTimer = Timer(EarthquakeConfig.cooldownDuration, () {
       _inCooldown = false;
       _staLta.unfreezeLta();
+      // Clear trigger window and gyro window so the next detection
+      // cycle starts from a clean slate (2s fill time acts as grace period).
+      _resetTriggerWindow();
+      _resetGyroWindow();
+      _collectingPostTrigger = false;
+      _postTriggerSampleCount = 0;
       if (monitorState.value == EarthquakeMonitorState.cooldown) {
         monitorState.value = EarthquakeMonitorState.monitoring;
       }
