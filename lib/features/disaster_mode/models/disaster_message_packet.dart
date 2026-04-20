@@ -1,82 +1,38 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'disaster_enums.dart';
+
+import '../../../models/household_profile.dart';
 import 'user_health_profile.dart';
 
-/// v2 binary protocol layout:
+/// v4 binary protocol (preferred):
 ///
-/// Byte 0:  [7:6]=0b10 (v2) | [5:4]=priority | [3:2]=statusBitmask[1:0] | [1:0]=severity[3:2]
-/// Byte 1:  [7:6]=severity[1:0] | [5:0]=0x00
-/// Byte 2:  injury flags
-/// Byte 3:  situation flags
-/// Byte 4:  needs flags
-/// Byte 5:  people flags
-/// Byte 6:  people count [7:4]=adults [3:0]=children
-/// Byte 7:  triage score
-/// Bytes 8–11: health profile (4 bytes from UserHealthProfile.toBytes())
-/// Byte 12: message length (0–243)
-/// Bytes 13..13+len-1: UTF-8 message
-/// Last byte: XOR checksum of all preceding bytes
+/// Byte 0:    0xD0 — v4 marker
+/// Bytes 1–4: health profile ([UserHealthProfile.toBytes])
+/// Byte 5:    primary message length (0–180)
+/// Bytes 6 … 6+msgLen-1: UTF-8 user message
+/// Bytes …:   uint16 BE household JSON length (0 = none)
+/// …:         UTF-8 JSON (members, pets, emergency contacts for this gateway)
+/// Last byte: XOR checksum
+///
+/// v3 (legacy, decode only): marker 0xC0, no household trailer.
 class DisasterMessagePacket {
-  static const int _version = 2;
-  static const int _maxMessageBytes = 243;
+  static const int _v3Marker = 0xC0;
+  static const int _v4Marker = 0xD0;
 
-  final PriorityLevel priority;
-  final int triageStatusBitmask; // 0=injured, 1=trapped, 2=safe
-  final int severityNibble;      // 0–15
-  final int injuryFlags;
-  final int situationFlags;
-  final int needsFlags;
-  final int peopleFlags;
-  final int adultCount;          // 0–15
-  final int childCount;          // 0–15
-  final int triageScore;         // 0–255
+  static const int _maxMessageBytes = 180;
+  static const int _maxHouseholdBytes = 280;
+
   final UserHealthProfile healthProfile;
   final String messageText;
 
+  /// Hane profili — optional; omitted if null or empty.
+  final HouseholdProfile? household;
+
   const DisasterMessagePacket({
-    required this.priority,
-    required this.triageStatusBitmask,
-    required this.severityNibble,
-    required this.injuryFlags,
-    required this.situationFlags,
-    required this.needsFlags,
-    required this.peopleFlags,
-    required this.adultCount,
-    required this.childCount,
-    required this.triageScore,
     required this.healthProfile,
     required this.messageText,
+    this.household,
   });
-
-  /// Convenience constructor that auto-derives priority from triageScore.
-  factory DisasterMessagePacket.simple({
-    required int triageScore,
-    required int triageStatusBitmask,
-    required int severityNibble,
-    required int injuryFlags,
-    required int situationFlags,
-    required int needsFlags,
-    required int peopleFlags,
-    required int adultCount,
-    required int childCount,
-    required UserHealthProfile healthProfile,
-    required String messageText,
-  }) =>
-      DisasterMessagePacket(
-        priority: PriorityLevel.fromTriageScore(triageScore),
-        triageScore: triageScore,
-        triageStatusBitmask: triageStatusBitmask,
-        severityNibble: severityNibble,
-        injuryFlags: injuryFlags,
-        situationFlags: situationFlags,
-        needsFlags: needsFlags,
-        peopleFlags: peopleFlags,
-        adultCount: adultCount,
-        childCount: childCount,
-        healthProfile: healthProfile,
-        messageText: messageText,
-      );
 
   List<int> _truncateUtf8ToMaxBytes(String text, int maxBytes) {
     if (maxBytes <= 0 || text.isEmpty) return const <int>[];
@@ -91,36 +47,51 @@ class DisasterMessagePacket {
     return out;
   }
 
+  static List<int> _truncateUtf8Raw(List<int> raw, int maxBytes) {
+    if (raw.length <= maxBytes) return raw;
+    var end = maxBytes;
+    while (end > 0 && (raw[end - 1] & 0xC0) == 0x80) {
+      end--;
+    }
+    return raw.sublist(0, end);
+  }
+
   Uint8List encode() {
     final msgBytes = _truncateUtf8ToMaxBytes(messageText, _maxMessageBytes);
-    final totalLen = 13 + msgBytes.length + 1; // header(13) + msg + checksum
-    final buf = Uint8List(totalLen);
 
-    buf[0] = ((_version & 0x03) << 6) |
-        ((priority.bitmask & 0x03) << 4) |
-        ((triageStatusBitmask & 0x03) << 2) |
-        ((severityNibble >> 2) & 0x03);
-    buf[1] = ((severityNibble & 0x03) << 6);
-    buf[2] = injuryFlags & 0xFF;
-    buf[3] = situationFlags & 0xFF;
-    buf[4] = needsFlags & 0xFF;
-    buf[5] = peopleFlags & 0xFF;
-    buf[6] = ((adultCount & 0x0F) << 4) | (childCount & 0x0F);
-    buf[7] = triageScore & 0xFF;
-
-    final healthBytes = healthProfile.toBytes();
-    buf[8] = healthBytes[0];
-    buf[9] = healthBytes[1];
-    buf[10] = healthBytes[2];
-    buf[11] = healthBytes[3];
-
-    buf[12] = msgBytes.length;
-    for (var i = 0; i < msgBytes.length; i++) {
-      buf[13 + i] = msgBytes[i];
+    List<int> hhBytes = const <int>[];
+    if (_hasHouseholdPayload) {
+      final jsonStr = jsonEncode(household!.toJson());
+      final raw = utf8.encode(jsonStr);
+      hhBytes = _truncateUtf8Raw(raw, _maxHouseholdBytes);
     }
 
-    // XOR checksum of all preceding bytes
-    int checksum = 0;
+    final hhLen = hhBytes.length;
+    // v4: 1 + 4 + 1 + msgLen + 2 + hhLen + 1 checksum  →  9 + msgLen + hhLen
+    final totalLen = 9 + msgBytes.length + hhLen;
+    final buf = Uint8List(totalLen);
+
+    var o = 0;
+    buf[o++] = _v4Marker;
+
+    final healthBytes = healthProfile.toBytes();
+    buf[o++] = healthBytes[0];
+    buf[o++] = healthBytes[1];
+    buf[o++] = healthBytes[2];
+    buf[o++] = healthBytes[3];
+
+    buf[o++] = msgBytes.length;
+    for (var i = 0; i < msgBytes.length; i++) {
+      buf[o++] = msgBytes[i];
+    }
+
+    buf[o++] = (hhLen >> 8) & 0xFF;
+    buf[o++] = hhLen & 0xFF;
+    for (var i = 0; i < hhBytes.length; i++) {
+      buf[o++] = hhBytes[i];
+    }
+
+    var checksum = 0;
     for (var i = 0; i < totalLen - 1; i++) {
       checksum ^= buf[i];
     }
@@ -128,42 +99,85 @@ class DisasterMessagePacket {
     return buf;
   }
 
-  /// Returns null if checksum fails or buffer too short.
-  static DisasterMessagePacket? decode(Uint8List bytes) {
-    if (bytes.length < 14) return null; // minimum: 13 header + 0 msg + 1 checksum
-    if (((bytes[0] >> 6) & 0x03) != _version) return null;
+  bool get _hasHouseholdPayload {
+    final h = household;
+    if (h == null) return false;
+    return h.members.isNotEmpty ||
+        h.pets.isNotEmpty ||
+        h.emergencyContacts.isNotEmpty;
+  }
 
-    // Validate checksum
+  /// Returns null if checksum fails or buffer invalid.
+  static DisasterMessagePacket? decode(Uint8List bytes) {
+    if (bytes.length < 7) return null;
+    final marker = bytes[0];
+    if (marker == _v4Marker) return _decodeV4(bytes);
+    if (marker == _v3Marker) return _decodeV3(bytes);
+    return null;
+  }
+
+  static DisasterMessagePacket? _decodeV3(Uint8List bytes) {
     int checksum = 0;
     for (var i = 0; i < bytes.length - 1; i++) {
       checksum ^= bytes[i];
     }
     if (checksum != bytes[bytes.length - 1]) return null;
 
-    final priority = PriorityLevel.fromBitmask((bytes[0] >> 4) & 0x03);
-    final statusBitmask = (bytes[0] >> 2) & 0x03;
-    final severityNibble =
-        ((bytes[0] & 0x03) << 2) | ((bytes[1] >> 6) & 0x03);
-    final msgLen = bytes[12];
-    if (bytes.length < 13 + msgLen + 1) return null;
+    final msgLen = bytes[5];
+    if (bytes.length < 7 + msgLen) return null;
 
-    final msgBytes = bytes.sublist(13, 13 + msgLen);
+    final healthProfile = UserHealthProfile.fromBytes(bytes.sublist(1, 5));
+    final msgBytes = bytes.sublist(6, 6 + msgLen);
     final messageText = utf8.decode(msgBytes, allowMalformed: true);
-    final healthProfile = UserHealthProfile.fromBytes(bytes.sublist(8, 12));
 
     return DisasterMessagePacket(
-      priority: priority,
-      triageStatusBitmask: statusBitmask,
-      severityNibble: severityNibble,
-      injuryFlags: bytes[2],
-      situationFlags: bytes[3],
-      needsFlags: bytes[4],
-      peopleFlags: bytes[5],
-      adultCount: (bytes[6] >> 4) & 0x0F,
-      childCount: bytes[6] & 0x0F,
-      triageScore: bytes[7],
       healthProfile: healthProfile,
       messageText: messageText,
+      household: null,
+    );
+  }
+
+  static DisasterMessagePacket? _decodeV4(Uint8List bytes) {
+    if (bytes.length < 9) return null;
+
+    final msgLen = bytes[5];
+    final hhOffset = 6 + msgLen;
+    if (bytes.length < hhOffset + 2) return null;
+
+    final hhLen = (bytes[hhOffset] << 8) | bytes[hhOffset + 1];
+    // 1+4+1+msgLen+2+hhLen+checksum
+    final expectedLen = 9 + msgLen + hhLen;
+    if (bytes.length != expectedLen) return null;
+
+    int checksum = 0;
+    for (var i = 0; i < bytes.length - 1; i++) {
+      checksum ^= bytes[i];
+    }
+    if (checksum != bytes[bytes.length - 1]) return null;
+
+    final healthProfile = UserHealthProfile.fromBytes(bytes.sublist(1, 5));
+    final messageText = msgLen > 0
+        ? utf8.decode(bytes.sublist(6, 6 + msgLen), allowMalformed: true)
+        : '';
+
+    HouseholdProfile? household;
+    if (hhLen > 0) {
+      try {
+        final jsonStr = utf8.decode(
+          bytes.sublist(hhOffset + 2, hhOffset + 2 + hhLen),
+          allowMalformed: true,
+        );
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        household = HouseholdProfile.fromJson(map);
+      } catch (_) {
+        household = null;
+      }
+    }
+
+    return DisasterMessagePacket(
+      healthProfile: healthProfile,
+      messageText: messageText,
+      household: household,
     );
   }
 }

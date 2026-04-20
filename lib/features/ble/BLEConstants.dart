@@ -130,6 +130,9 @@ class BleConstants {
   /// v2 protocol — DisasterMessagePacket with health profile + message text
   static const int protocolVersionV2 = 0x02;
 
-  /// Active protocol version used by DisasterController
-  static const int currentProtocolVersion = protocolVersionV2;
+  /// v4 protocol — first byte 0xD0: health + message + optional household JSON
+  static const int protocolVersionV4 = 0x04;
+
+  /// Active protocol version used by DisasterController (binary first byte 0xD0)
+  static const int currentProtocolVersion = protocolVersionV4;
 }

@@ -3,6 +3,23 @@
 #include <Wire.h>
 #include "tx_ring_buffer.h"
 
+// ─── BLE client subscription tracking (must follow #includes immediately) ───
+//
+// Arduino prepends auto-generated function prototypes after all #include lines.
+// If this struct lived mid-file, those prototypes would reference
+// ClientSubscriptionState before it was defined → compile error.
+
+static const uint8_t MAX_CLIENTS = 3;
+
+struct ClientSubscriptionState {
+  bool     inUse            = false;
+  uint16_t connHandle       = 0;
+  bool     txSubscribed     = false;
+  bool     sensorSubscribed = false;
+};
+
+static ClientSubscriptionState clientSubscriptions[MAX_CLIENTS];
+
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 static const char* DEVICE_NAME        = "ESP32_BLE_DEVICE";
@@ -19,8 +36,8 @@ static const int      MPU_SCL_PIN       = 33;
 static const uint32_t SENSOR_INTERVAL_MS = 40;   // 25 Hz
 
 static const uint32_t NOTIFY_INTERVAL_MS = 50;
-static const uint8_t  MAX_CLIENTS        = 3;
-static const uint8_t  PROTOCOL_V2        = 0x02;
+static const uint8_t  PROTOCOL_V3_MARKER = 0xC0; // legacy v3 frame
+static const uint8_t  PROTOCOL_V4_MARKER = 0xD0; // health + message + optional household JSON
 
 // ─── Activation Configuration ───────────────────────────────────────────────
 
@@ -190,15 +207,6 @@ static volatile uint8_t      sensorSubCount   = 0;
 static uint32_t              lastNotifyMs     = 0;
 static uint32_t              lastSensorMs     = 0;
 
-struct ClientSubscriptionState {
-  bool     inUse            = false;
-  uint16_t connHandle       = 0;
-  bool     txSubscribed     = false;
-  bool     sensorSubscribed = false;
-};
-
-static ClientSubscriptionState clientSubscriptions[MAX_CLIENTS];
-
 // ─── Utility ────────────────────────────────────────────────────────────────
 
 static void trimTrailing(std::string& s) {
@@ -267,57 +275,140 @@ static uint8_t xorChecksum(const uint8_t* data, size_t len) {
   return out;
 }
 
-// Returns true if this write was recognized as a v2 packet (valid or invalid).
-// Returning true means caller should not process this payload as text command.
-static bool tryHandleV2Packet(const std::string& rxValue) {
+// v4 packet layout:
+//   Byte 0:    0xD0
+//   Bytes 1–4: health (byte2 = disability bitmask bits 0–4, multi-select)
+//   Byte 5:    message length
+//   Bytes 6…:  UTF-8 message
+//   Next 2:    uint16 BE household JSON length (0 = none)
+//   …:         UTF-8 JSON (hane profili: members, pets, emergencyContacts)
+//   Last byte: XOR checksum
+static bool tryHandleV4Packet(const std::string& rxValue) {
   const size_t n = rxValue.size();
-  if (n < 14) return false;  // minimum v2 frame size
+  if (n < 9) return false;
 
   const uint8_t* b = reinterpret_cast<const uint8_t*>(rxValue.data());
-  const uint8_t version = (b[0] >> 6) & 0x03;
-  if (version != PROTOCOL_V2) return false;
+  if (b[0] != PROTOCOL_V4_MARKER) return false;
 
-  const uint8_t msgLen = b[12];
-  const size_t expectedLen = 13 + (size_t)msgLen + 1;
+  const uint8_t msgLen = b[5];
+  const size_t hhOff = 6 + (size_t)msgLen;
+  if (n < hhOff + 2) {
+    Serial.println("[V4] INVALID — truncated before household length");
+    queueTxMessage("MSG_BAD_LEN");
+    return true;
+  }
+
+  const uint16_t hhLen = (uint16_t(b[hhOff]) << 8) | b[hhOff + 1];
+  const size_t expectedLen = 9 + (size_t)msgLen + (size_t)hhLen;
 
   if (n != expectedLen) {
-    Serial.printf("[V2] INVALID length: got=%u expected=%u\n",
+    Serial.printf("[V4] INVALID length: got=%u expected=%u\n",
+                  (unsigned)n, (unsigned)expectedLen);
+    queueTxMessage("MSG_BAD_LEN");
+    return true;
+  }
+
+  if (xorChecksum(b, expectedLen - 1) != b[expectedLen - 1]) {
+    Serial.printf("[V4] INVALID checksum\n");
+    queueTxMessage("MSG_BAD_CSUM");
+    return true;
+  }
+
+  const uint8_t hpRaw0 = b[1];
+  const uint8_t hpRaw1 = b[2];
+  const uint8_t chronicDiseases = b[3];
+  const uint8_t medications = b[4];
+  const bool hasProfile = (hpRaw0 & 0x80) != 0;
+  const uint8_t gender = (hpRaw0 >> 5) & 0x03;
+  const uint8_t ageRange = (hpRaw0 >> 2) & 0x07;
+  const uint8_t dMask = hpRaw1 & 0x1F;
+
+  std::string msg;
+  if (msgLen > 0) {
+    msg.assign(reinterpret_cast<const char*>(b + 6), msgLen);
+  }
+
+  Serial.printf("[V4] OK msgLen=%u householdJsonLen=%u\n", msgLen, (unsigned)hhLen);
+  Serial.printf("[V4] Health hasProfile=%u gender=%u ageRange=%u disabilityMask=0x%02X chronic=0x%02X meds=0x%02X\n",
+                (unsigned)hasProfile, gender, ageRange, dMask, chronicDiseases, medications);
+  if (!msg.empty()) {
+    Serial.printf("[V4] Message: \"%s\"\n", msg.c_str());
+  }
+  if (hhLen > 0) {
+    std::string hhJson(reinterpret_cast<const char*>(b + hhOff + 2), hhLen);
+    Serial.print("[V4] Household JSON: ");
+    if (hhJson.size() > 240) {
+      Serial.println("(first 240 chars)");
+      Serial.println(hhJson.substr(0, 240).c_str());
+    } else {
+      Serial.println(hhJson.c_str());
+    }
+  }
+
+  queueTxMessage("MSG_OK");
+  return true;
+}
+
+// v3 packet layout (legacy):
+//   Byte 0:    0xC0 (version marker)
+//   Bytes 1–4: health profile
+//   Byte 5:    message length (0–249)
+//   Bytes 6…:  UTF-8 message text
+//   Last byte: XOR checksum
+//
+// Returns true if recognised as v3 (valid or invalid) so the caller
+// does not try to interpret it as a text command.
+static bool tryHandleV3Packet(const std::string& rxValue) {
+  const size_t n = rxValue.size();
+  if (n < 1) return false;
+
+  const uint8_t* b = reinterpret_cast<const uint8_t*>(rxValue.data());
+  if (b[0] != PROTOCOL_V3_MARKER) return false;
+
+  // Minimum frame: 7 bytes (1 marker + 4 health + 1 msgLen + 1 checksum)
+  if (n < 7) {
+    Serial.println("[V3] INVALID — frame too short");
+    queueTxMessage("MSG_BAD_LEN");
+    return true;
+  }
+
+  const uint8_t msgLen     = b[5];
+  const size_t expectedLen = 7 + (size_t)msgLen; // 6 header + msgLen + 1 checksum
+
+  if (n != expectedLen) {
+    Serial.printf("[V3] INVALID length: got=%u expected=%u\n",
                   (unsigned)n, (unsigned)expectedLen);
     queueTxMessage("MSG_BAD_LEN");
     return true;
   }
 
   const uint8_t expectedCsum = xorChecksum(b, expectedLen - 1);
-  const uint8_t packetCsum = b[expectedLen - 1];
+  const uint8_t packetCsum   = b[expectedLen - 1];
   if (expectedCsum != packetCsum) {
-    Serial.printf("[V2] INVALID checksum: calc=0x%02X pkt=0x%02X\n",
+    Serial.printf("[V3] INVALID checksum: calc=0x%02X pkt=0x%02X\n",
                   expectedCsum, packetCsum);
     queueTxMessage("MSG_BAD_CSUM");
     return true;
   }
 
-  const uint8_t priority = (b[0] >> 4) & 0x03;
-  const uint8_t status = (b[0] >> 2) & 0x03;
-  const uint8_t severity = ((b[0] & 0x03) << 2) | ((b[1] >> 6) & 0x03);
-  const uint8_t injuryFlags = b[2];
-  const uint8_t situationFlags = b[3];
-  const uint8_t needsFlags = b[4];
-  const uint8_t peopleFlags = b[5];
-  const uint8_t adults = (b[6] >> 4) & 0x0F;
-  const uint8_t children = b[6] & 0x0F;
-  const uint8_t triageScore = b[7];
-
+  // ── Health profile (bytes 1–4) — legacy v3 may use old single-disability encoding
+  const uint8_t hpRaw0          = b[1];
+  const uint8_t hpRaw1          = b[2];
+  const uint8_t chronicDiseases = b[3];
+  const uint8_t medications     = b[4];
+  const bool    hasProfile       = (hpRaw0 & 0x80) != 0;
+  const uint8_t gender           = (hpRaw0 >> 5) & 0x03;
+  const uint8_t ageRange         = (hpRaw0 >> 2) & 0x07;
+  const uint8_t dMask            = hpRaw1 & 0x1F;
+  Serial.printf("[V3] OK msgLen=%u\n", msgLen);
+  Serial.printf("[V3] Health hasProfile=%u gender=%u ageRange=%u disabilityMask=0x%02X chronic=0x%02X meds=0x%02X\n",
+                (unsigned)hasProfile, gender, ageRange, dMask, chronicDiseases, medications);
   std::string msg;
   if (msgLen > 0) {
-    msg.assign(reinterpret_cast<const char*>(b + 13), msgLen);
+    msg.assign(reinterpret_cast<const char*>(b + 6), msgLen);
   }
-
-  Serial.printf("[V2] OK prio=%u status=%u sev=%u triage=%u adults=%u children=%u msgLen=%u\n",
-                priority, status, severity, triageScore, adults, children, msgLen);
-  Serial.printf("[V2] Flags injury=0x%02X situation=0x%02X needs=0x%02X people=0x%02X\n",
-                injuryFlags, situationFlags, needsFlags, peopleFlags);
   if (!msg.empty()) {
-    Serial.printf("[V2] Message: \"%s\"\n", msg.c_str());
+    Serial.printf("[V3] Message: \"%s\"\n", msg.c_str());
   }
 
   queueTxMessage("MSG_OK");
@@ -325,16 +416,14 @@ static bool tryHandleV2Packet(const std::string& rxValue) {
 }
 
 // During pre-activation we only accept explicit password text.
-// Binary frames (or non-printable payloads) must not consume password attempts.
-static bool looksLikeBinaryOrV2(const std::string& rxValue) {
+// Binary frames (v3/v4) must not consume password attempts.
+static bool looksLikeBinary(const std::string& rxValue) {
   if (rxValue.empty()) return false;
   const uint8_t* b = reinterpret_cast<const uint8_t*>(rxValue.data());
-  const uint8_t version = (b[0] >> 6) & 0x03;
-  if (version == PROTOCOL_V2) return true;
+  if (b[0] == PROTOCOL_V3_MARKER || b[0] == PROTOCOL_V4_MARKER) return true;
   for (size_t i = 0; i < rxValue.size(); i++) {
     const uint8_t c = b[i];
-    const bool printableAscii = (c >= 32 && c <= 126);
-    if (!printableAscii) return true;
+    if (c < 32 || c > 126) return true;
   }
   return false;
 }
@@ -357,15 +446,16 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 
     // ── MODE BRANCH: Activation vs Normal ──────────────────────────
     if (!deviceActivated) {
-      if (looksLikeBinaryOrV2(rxValue)) {
+      if (looksLikeBinary(rxValue)) {
         Serial.println("[AUTH] Ignoring binary/non-text payload in activation mode");
         queueTxMessage("NEED_ACTIVATION");
         return;
       }
       handleActivation(trimmed);
     } else {
-      // In activated mode, first try v2 binary packet handling.
-      if (tryHandleV2Packet(rxValue)) return;
+      // In activated mode: v4 (current app) then legacy v3.
+      if (tryHandleV4Packet(rxValue)) return;
+      if (tryHandleV3Packet(rxValue)) return;
       handleCommand(trimmed);
     }
   }
