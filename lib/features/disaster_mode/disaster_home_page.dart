@@ -55,6 +55,20 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   final _tts = FlutterTts();
   Timer? _soundTimer;
 
+  // ── Inactivity auto-send ───────────────────────────────────────────
+  //
+  // Fires once after 5 minutes of complete inactivity.
+  // Rules:
+  //   • Resets on any user interaction (typing, mic, SOS) — user is alive.
+  //   • Disarms permanently if the user manually sends a message.
+  //   • Disarms permanently after it fires — sends exactly once, never again.
+  //   • Survives screen-lock (Dart Timer runs while app is foreground).
+  //     If the OS kills the process, the timer is lost — this is a known
+  //     Android limitation without a foreground service.
+  static const _kInactivityDuration = Duration(minutes: 5);
+  Timer? _inactivityTimer;
+  bool _autoSendArmed = true;
+
   @override
   void initState() {
     super.initState();
@@ -81,9 +95,13 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       });
     });
 
+    // Reset inactivity timer whenever the user types (proves they are active).
+    _manualTextController.addListener(_resetInactivityTimer);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _ctrl.onDisasterActivated();
       _startNoResponseTimer();
+      _resetInactivityTimer(); // arm the 5-minute inactivity countdown
     });
   }
 
@@ -91,6 +109,8 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   void dispose() {
     BleService().deactivateDisasterMode();
     PFAMessageService().cancelNoResponseTimer();
+    _inactivityTimer?.cancel();
+    _manualTextController.removeListener(_resetInactivityTimer);
     _manualTextController.dispose();
 
     // Stop all beacons
@@ -128,6 +148,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   // ─── Voice-to-text ─────────────────────────────────────────────────
 
   Future<void> _toggleListening() async {
+    _resetInactivityTimer(); // user is active
     if (_isListening) {
       await _speech.stop();
       setState(() => _isListening = false);
@@ -178,6 +199,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   // ─── SOS beacon (flashlight + audio combined) ──────────────────────
 
   Future<void> _toggleSos() async {
+    _resetInactivityTimer(); // user is active
     if (_isSosActive) {
       setState(() {
         _isSosActive = false;
@@ -267,6 +289,49 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     _tts.stop();
   }
 
+  // ─── Inactivity auto-send ──────────────────────────────────────────
+
+  /// (Re)starts the 5-minute countdown. No-op if auto-send is already disarmed.
+  void _resetInactivityTimer() {
+    if (!_autoSendArmed) return;
+    _inactivityTimer?.cancel();
+    _inactivityTimer = Timer(_kInactivityDuration, _onInactivityTimeout);
+  }
+
+  /// Permanently disarms the auto-send. Called when the user sends manually.
+  void _disarmAutoSend() {
+    _autoSendArmed = false;
+    _inactivityTimer?.cancel();
+    _inactivityTimer = null;
+  }
+
+  /// Fires once after 5 minutes of complete inactivity.
+  Future<void> _onInactivityTimeout() async {
+    // Disarm first — guarantees exactly-once delivery even if this is called
+    // concurrently (e.g. dispose race).
+    _autoSendArmed = false;
+    _inactivityTimer = null;
+
+    const autoMessage =
+        'Otomatik acil durum bildirimi — kullanıcı 5 dakikadır yanıt vermiyor';
+
+    final success = await _ctrl.sendManualMessage(autoMessage);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Otomatik mesaj gönderildi (5 dk inaktivite)'
+              : 'Otomatik mesaj kuyruğa alındı — bağlantıda iletilecek',
+        ),
+        backgroundColor:
+            success ? AppColors.warning : Colors.grey.shade800,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
   // ─── PFA helpers (background only — no UI trigger) ─────────────────
 
   void _showPfaMessage(PfaMessage message) {
@@ -284,13 +349,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       duration: interval,
       onTimeout: () {
         if (mounted) {
-          final risk = _ctrl.triageScore.value;
           _showPfaMessage(
             PFAMessageService().selectMessage(
                   PfaCategory.uncertainty,
                   isVulnerable: _isVulnerableProfile,
-                  riskScore: risk,
-                  seed: 'no-response-$risk',
+                  riskScore: 0,
+                  seed: 'no-response',
                 ) ??
                 PFAMessageService().firstContactMessage(),
           );
@@ -301,13 +365,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   void _onUserMessageSent(String text) {
     PFAMessageService().cancelNoResponseTimer();
-    final risk = _ctrl.triageScore.value;
     final category =
-        PFAMessageService().detectCategoryWithRisk(text, riskScore: risk);
+        PFAMessageService().detectCategoryWithRisk(text, riskScore: 0);
     final msg = PFAMessageService().selectMessage(
       category,
       isVulnerable: _isVulnerableProfile,
-      riskScore: risk,
+      riskScore: 0,
       seed: text,
     );
     if (msg != null) _showPfaMessage(msg);
@@ -329,6 +392,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     if (success) {
       _manualTextController.clear();
       _onUserMessageSent(text);
+      _disarmAutoSend(); // user is clearly active — auto-send no longer needed
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -510,49 +574,93 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   // ─── Message input row ─────────────────────────────────────────────
 
+  static const _messageInputTextColor = Color(0xFF0F172A);
+  static const _messageInputFillColor = Color(0xFFF1F5F9);
+
   Widget _buildMessageInput() {
+    final borderColor =
+        _isListening ? Colors.red.shade400 : Colors.grey.shade600;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Colors.grey.shade900,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: _isListening ? Colors.red : Colors.grey.shade700,
-          width: _isListening ? 1.5 : 0.5,
-        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: _isListening ? 1.5 : 1),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
-            child: TextField(
-              controller: _manualTextController,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: InputDecoration(
-                hintText:
-                    _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
-                hintStyle: TextStyle(
-                  color: _isListening
-                      ? Colors.red.shade300
-                      : Colors.grey.shade500,
-                  fontSize: 14,
+            child: Theme(
+              // Global [inputDecorationTheme] uses filled light surfaces;
+              // disaster screen uses dark scaffold — merged theme made text
+              // white on a light fill (invisible). Override fully here.
+              data: Theme.of(context).copyWith(
+                textSelectionTheme: const TextSelectionThemeData(
+                  cursorColor: AppColors.primary,
+                  selectionColor: Color(0x663B82F6),
+                  selectionHandleColor: AppColors.primary,
                 ),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(vertical: 10),
               ),
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _onManualSend(),
+              child: TextField(
+                controller: _manualTextController,
+                minLines: 3,
+                maxLines: 6,
+                keyboardType: TextInputType.multiline,
+                style: const TextStyle(
+                  color: _messageInputTextColor,
+                  fontSize: 16,
+                  height: 1.35,
+                ),
+                decoration: InputDecoration(
+                  isDense: false,
+                  filled: true,
+                  fillColor: _messageInputFillColor,
+                  hintText:
+                      _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
+                  hintStyle: TextStyle(
+                    color: _isListening
+                        ? Colors.red.shade700
+                        : const Color(0xFF64748B),
+                    fontSize: 16,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 14,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(
+                      color: Color(0xFFCBD5E1),
+                      width: 1,
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(
+                      color: AppColors.primary,
+                      width: 2,
+                    ),
+                  ),
+                ),
+                textInputAction: TextInputAction.newline,
+                onSubmitted: (_) => _onManualSend(),
+              ),
             ),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 8),
 
           // Voice-to-text mic button
           GestureDetector(
             onTap: _toggleListening,
             child: Container(
-              width: 40,
-              height: 40,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: _isListening
@@ -561,26 +669,26 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
               ),
               child: Icon(
                 _isListening ? Icons.mic : Icons.mic_none,
-                size: 20,
-                color: _isListening ? Colors.red : Colors.white54,
+                size: 24,
+                color: _isListening ? Colors.red : Colors.white70,
               ),
             ),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 6),
 
           // Send button
           GestureDetector(
             onTap: _onManualSend,
             child: Container(
-              width: 40,
-              height: 40,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.success.withValues(alpha: 0.2),
+                color: AppColors.success.withValues(alpha: 0.25),
               ),
               child: const Icon(
                 Icons.send_rounded,
-                size: 20,
+                size: 24,
                 color: AppColors.success,
               ),
             ),
