@@ -1,12 +1,9 @@
-import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
-import '../models/disaster_enums.dart';
-import '../models/triage_payload.dart';
 import '../models/user_health_profile.dart';
 import '../models/disaster_message_packet.dart';
 import '../../ble/ble_service.dart';
+import '../../../models/household_profile.dart';
 import '../../../services/gateway_service.dart';
 import '../../../core/api/disaster_repository.dart';
 import '../../user_profile/services/vulnerable_group_service.dart';
@@ -14,14 +11,11 @@ import '../../user_profile/services/vulnerable_group_service.dart';
 /// Controller for the disaster-mode screen.
 ///
 /// Responsibilities:
-///   - Manage selected status + smart chips
-///   - Calculate triage score in real time
-///   - Encode bitmask payload via [TriagePayload]
-///   - Send payload via [BleService.sendHexPayload]
-///   - Enforce 15-minute debounce between sends
+///   - Load health profile from registration (for all users)
+///   - Send free-text messages via BLE with health profile attached
 ///   - Track BLE connection state
 ///
-/// NO BLE business logic lives in widgets — all state flows through here.
+/// Outgoing BLE frames use v4: health profile + message + optional hane profili JSON.
 class DisasterController extends GetxController {
   DisasterController({BleService? bleService})
       : _bleService = bleService ?? BleService();
@@ -30,389 +24,65 @@ class DisasterController extends GetxController {
 
   // ─── Observable state ──────────────────────────────────────────────
 
-  /// Currently selected primary status (null = nothing selected yet).
-  final selectedStatus = Rxn<DisasterStatus>();
-
-  /// Selected chips per category.
-  final selectedInjuries = <InjuryChip>{}.obs;
-  final selectedSituations = <SituationChip>{}.obs;
-  final selectedNeeds = <NeedChip>{}.obs;
-  final selectedPeople = <PeopleChip>{}.obs;
-
-  /// People counts.
-  final adultCount = 1.obs;
-  final childCount = 0.obs;
-
-  /// Real-time triage score & category.
-  final triageScore = 0.obs;
-  final triageCategory = TriageCategory.green.obs;
-
-  /// Debounce tracking.
-  final lastSentAt = Rxn<DateTime>();
-  final canSend = true.obs;
-  final debounceRemaining = 0.obs; // seconds remaining
-
   /// Sending state.
   final isSending = false.obs;
   final lastSendSuccess = Rxn<bool>();
 
-  /// Health profile for v2 packet encoding.
+  /// Health profile loaded from registration — sent with every message.
   UserHealthProfile _healthProfile = UserHealthProfile.empty();
 
-  void updateHealthProfile(UserHealthProfile profile) {
-    _healthProfile = profile;
-  }
+  // ─── Derived BLE state ─────────────────────────────────────────────
 
-  // ─── Derived BLE state (read from BleService) ─────────────────────
-
-  // Read the RxBool directly so Obx can track reactivity.
-  // _bleService.isConnected is a ValueNotifier (invisible to GetX).
-  // _bleService.bleConnection.isConnected is the RxBool (tracked by Obx).
   bool get isConnected => _bleService.bleConnection.isConnected.value;
   String get bleStatus => _bleService.bleConnection.status.value;
 
-  // ─── Constants ─────────────────────────────────────────────────────
+  // ─── Profile load ──────────────────────────────────────────────────
 
-  static const int _debounceDurationMinutes = 15;
-  static const int _debounceDurationSeconds = _debounceDurationMinutes * 60;
-
-  Timer? _debounceTimer;
-
-  // ─── Lifecycle ─────────────────────────────────────────────────────
-
-  @override
-  void onClose() {
-    _debounceTimer?.cancel();
-    super.onClose();
-  }
-
-  // ─── Status selection ──────────────────────────────────────────────
-
-  void selectStatus(DisasterStatus status) {
-    final previous = selectedStatus.value;
-    selectedStatus.value = status;
-
-    // Clear chips that are not relevant for the new status
-    if (status == DisasterStatus.safe) {
-      selectedInjuries.clear();
-      selectedSituations.clear();
-    }
-
-    // If the status TYPE changed while debounce is active, allow re-send
-    if (previous != null && previous != status && !canSend.value) {
-      _resetDebounce();
-    }
-
-    _recalculate();
-  }
-
-  void clearStatus() {
-    selectedStatus.value = null;
-    selectedInjuries.clear();
-    selectedSituations.clear();
-    selectedNeeds.clear();
-    selectedPeople.clear();
-    adultCount.value = 1;
-    childCount.value = 0;
-    _recalculate();
-  }
-
-  // ─── Chip toggles ─────────────────────────────────────────────────
-
-  void toggleInjury(InjuryChip chip) {
-    if (selectedInjuries.contains(chip)) {
-      selectedInjuries.remove(chip);
-    } else {
-      selectedInjuries.add(chip);
-    }
-    _recalculate();
-  }
-
-  void toggleSituation(SituationChip chip) {
-    if (selectedSituations.contains(chip)) {
-      selectedSituations.remove(chip);
-    } else {
-      selectedSituations.add(chip);
-    }
-    _recalculate();
-  }
-
-  void toggleNeed(NeedChip chip) {
-    if (selectedNeeds.contains(chip)) {
-      selectedNeeds.remove(chip);
-    } else {
-      selectedNeeds.add(chip);
-    }
-  }
-
-  void togglePeople(PeopleChip chip) {
-    // "alone" is mutually exclusive with other people chips
-    if (chip == PeopleChip.alone) {
-      if (selectedPeople.contains(chip)) {
-        selectedPeople.remove(chip);
-      } else {
-        selectedPeople.clear();
-        selectedPeople.add(chip);
-        adultCount.value = 1;
-        childCount.value = 0;
-      }
-    } else {
-      selectedPeople.remove(PeopleChip.alone);
-      if (selectedPeople.contains(chip)) {
-        selectedPeople.remove(chip);
-      } else {
-        selectedPeople.add(chip);
-      }
-    }
-    _recalculate();
-  }
-
-  // ─── People counts ────────────────────────────────────────────────
-
-  void incrementAdults() {
-    if (adultCount.value < 15) adultCount.value++;
-    selectedPeople.remove(PeopleChip.alone);
-  }
-
-  void decrementAdults() {
-    if (adultCount.value > 0) adultCount.value--;
-  }
-
-  void incrementChildren() {
-    if (childCount.value < 15) childCount.value++;
-    selectedPeople.remove(PeopleChip.alone);
-    if (!selectedPeople.contains(PeopleChip.withChildren)) {
-      selectedPeople.add(PeopleChip.withChildren);
-    }
-    _recalculate();
-  }
-
-  void decrementChildren() {
-    if (childCount.value > 0) childCount.value--;
-    if (childCount.value == 0) {
-      selectedPeople.remove(PeopleChip.withChildren);
-    }
-    _recalculate();
-  }
-
-  // ─── Triage calculation ────────────────────────────────────────────
-
-  void _recalculate() {
-    final status = selectedStatus.value;
-    if (status == null) {
-      triageScore.value = 0;
-      triageCategory.value = TriageCategory.green;
-      return;
-    }
-
-    final score = calculateTriageScore(
-      status: status,
-      injuries: selectedInjuries.toSet(),
-      situations: selectedSituations.toSet(),
-      people: selectedPeople.toSet(),
-    );
-
-    triageScore.value = score;
-    triageCategory.value = TriageCategoryX.fromScore(score);
-  }
-
-  // ─── Bitmask encoding ─────────────────────────────────────────────
-
-  Uint8List buildPayload() {
-    final status = selectedStatus.value;
-    if (status == null) return Uint8List(0);
-
-    final payload = TriagePayload(
-      status: status,
-      injuries: selectedInjuries.toSet(),
-      situations: selectedSituations.toSet(),
-      needs: selectedNeeds.toSet(),
-      people: selectedPeople.toSet(),
-      adultCount: adultCount.value,
-      childCount: childCount.value,
-      triageScore: triageScore.value,
-    );
-
-    return payload.encode();
-  }
-
-  // ─── Flag builders ────────────────────────────────────────────────
-
-  int _buildInjuryFlags() =>
-      selectedInjuries.fold(0, (m, c) => m | (1 << c.bitPosition));
-
-  int _buildSituationFlags() =>
-      selectedSituations.fold(0, (m, c) => m | (1 << c.bitPosition));
-
-  int _buildNeedsFlags() =>
-      selectedNeeds.fold(0, (m, c) => m | (1 << c.bitPosition));
-
-  int _buildPeopleFlags() =>
-      selectedPeople.fold(0, (m, c) => m | (1 << c.bitPosition));
-
+  /// Called when disaster mode opens. Loads the registered health profile
+  /// for ALL users so it is always attached to outgoing BLE packets.
   Future<void> onDisasterActivated() async {
     final vgs = VulnerableGroupService();
     await vgs.load();
-    if (!vgs.isVulnerableGroup) return;
-
-    // Keep profile/location context fresh for the next user-triggered send,
-    // but do not auto-transmit on page entry.
-    await vgs.updateLocation();
-    updateHealthProfile(vgs.profile);
+    _healthProfile = vgs.profile;
   }
 
   // ─── Send ──────────────────────────────────────────────────────────
 
-    /// Encode the current state and send via BLE.
-  /// If connected, sends immediately. If not connected, queues the payload
-  /// for automatic delivery when the connection is restored — never drops.
+  /// Send a free-text message via BLE with the user's health profile attached.
+  /// Returns true if sent or successfully queued.
   /// Returns false only if no gateway has ever been added.
-  Future<bool> sendStatus() async {
-    if (selectedStatus.value == null) return false;
-    if (!canSend.value) return false;
-    if (isSending.value) return false;
-
-    isSending.value = true;
-
-    try {
-      // Ensure the queue knows which gateway to reconnect to even if
-      // this phone has never successfully connected in this session.
-      final savedGateways = GatewayService().gateways.value;
-      if (savedGateways.isEmpty && !isConnected) {
-        return false; // No gateway ever added — nothing to queue for
-      }
-      if (savedGateways.isNotEmpty) {
-        _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
-      }
-
-      // Build v2 packet and send via BLE queue.
-      final packet = DisasterMessagePacket.simple(
-        triageScore: triageScore.value,
-        triageStatusBitmask: selectedStatus.value?.bitmaskValue ?? 0,
-        severityNibble: (triageScore.value / 17).round().clamp(0, 15),
-        injuryFlags: _buildInjuryFlags(),
-        situationFlags: _buildSituationFlags(),
-        needsFlags: _buildNeedsFlags(),
-        peopleFlags: _buildPeopleFlags(),
-        adultCount: adultCount.value,
-        childCount: childCount.value,
-        healthProfile: _healthProfile,
-        messageText: '',
-      );
-      await _bleService.sendBinaryQueued(packet.encode());
-      lastSendSuccess.value = true;
-      _startDebounce();
-
-      final gatewayId = savedGateways.isNotEmpty ? savedGateways.first.id : null;
-      if (gatewayId != null) {
-        DisasterRepository().reportDisasterEvent(gatewayId, {
-          'type': 'triage_status',
-          'triageScore': triageScore.value,
-          'triageStatus': selectedStatus.value?.name,
-          'severityNibble': (triageScore.value / 17).round().clamp(0, 15),
-          'injuryFlags': _buildInjuryFlags(),
-          'situationFlags': _buildSituationFlags(),
-          'needsFlags': _buildNeedsFlags(),
-          'peopleFlags': _buildPeopleFlags(),
-          'adultCount': adultCount.value,
-          'childCount': childCount.value,
-          'sentAt': DateTime.now().toIso8601String(),
-        }).catchError((Object e) {
-          debugPrint('DisasterController: backend sync failed — $e');
-        });
-      }
-
-      return true;
-    } catch (e) {
-      lastSendSuccess.value = false;
-      return false;
-    } finally {
-      isSending.value = false;
-    }
-  }
-
-  // ─── Debounce ──────────────────────────────────────────────────────
-
-  void _startDebounce() {
-    lastSentAt.value = DateTime.now();
-    canSend.value = false;
-    debounceRemaining.value = _debounceDurationSeconds;
-
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      final sent = lastSentAt.value;
-      if (sent == null) {
-        _resetDebounce();
-        return;
-      }
-
-      final elapsed = DateTime.now().difference(sent).inSeconds;
-      final remaining = _debounceDurationSeconds - elapsed;
-
-      if (remaining <= 0) {
-        _resetDebounce();
-      } else {
-        debounceRemaining.value = remaining;
-      }
-    });
-  }
-
-  void _resetDebounce() {
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
-    canSend.value = true;
-    debounceRemaining.value = 0;
-  }
-
-  /// Format remaining debounce time as "MM:SS".
-  String get debounceFormatted {
-    final secs = debounceRemaining.value;
-    final m = (secs ~/ 60).toString().padLeft(2, '0');
-    final s = (secs % 60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-
-  // ─── Manual text message ───────────────────────────────────────────
-
-  /// Send a free-text message via BLE.
-  /// Returns true if the message was sent or successfully queued for retry.
-  /// Returns false only if no gateway has ever been added to the app.
   Future<bool> sendManualMessage(String text) async {
     if (text.trim().isEmpty) return false;
 
     final savedGateways = GatewayService().gateways.value;
-    if (savedGateways.isEmpty && !isConnected) {
-      return false; // No gateway to send to or queue for
-    }
+    if (savedGateways.isEmpty && !isConnected) return false;
 
-    // Ensure queue knows which gateway to reconnect to
     if (savedGateways.isNotEmpty) {
       _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
     }
 
+    isSending.value = true;
     try {
-      final packet = DisasterMessagePacket.simple(
-        triageScore: triageScore.value,
-        triageStatusBitmask: selectedStatus.value?.bitmaskValue ?? 0,
-        severityNibble: (triageScore.value / 17).round().clamp(0, 15),
-        injuryFlags: _buildInjuryFlags(),
-        situationFlags: _buildSituationFlags(),
-        needsFlags: _buildNeedsFlags(),
-        peopleFlags: _buildPeopleFlags(),
-        adultCount: adultCount.value,
-        childCount: childCount.value,
+      HouseholdProfile? household;
+      if (savedGateways.isNotEmpty) {
+        household =
+            GatewayService().getHouseholdProfile(savedGateways.first.id);
+      }
+
+      final packet = DisasterMessagePacket(
         healthProfile: _healthProfile,
         messageText: text.trim(),
+        household: household,
       );
       await _bleService.sendBinaryQueued(packet.encode());
+      lastSendSuccess.value = true;
 
-      final gatewayId = savedGateways.isNotEmpty ? savedGateways.first.id : null;
+      final gatewayId =
+          savedGateways.isNotEmpty ? savedGateways.first.id : null;
       if (gatewayId != null) {
         DisasterRepository().reportDisasterEvent(gatewayId, {
           'type': 'manual_message',
           'message': text.trim(),
-          'triageScore': triageScore.value,
-          'triageStatus': selectedStatus.value?.name,
           'sentAt': DateTime.now().toIso8601String(),
         }).catchError((Object e) {
           debugPrint('DisasterController: backend sync failed — $e');
@@ -421,7 +91,10 @@ class DisasterController extends GetxController {
 
       return true;
     } catch (_) {
+      lastSendSuccess.value = false;
       return false;
+    } finally {
+      isSending.value = false;
     }
   }
 }
