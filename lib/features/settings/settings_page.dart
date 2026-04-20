@@ -31,7 +31,7 @@ class _SettingsPageState extends State<SettingsPage> {
   AgeRange _selectedAge = AgeRange.unknown;
   Set<ChronicDisease> _selectedDiseases = {};
   Set<Medication> _selectedMeds = {};
-  DisabilityStatus _selectedDisability = DisabilityStatus.none;
+  Set<DisabilityStatus> _selectedDisabilities = {};
 
   @override
   void initState() {
@@ -61,7 +61,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _selectedAge = p.age;
       _selectedDiseases = Set.from(p.chronicDiseases);
       _selectedMeds = Set.from(p.medications);
-      _selectedDisability = p.disability;
+      _selectedDisabilities = Set.from(p.disabilities);
     });
   }
 
@@ -72,7 +72,7 @@ class _SettingsPageState extends State<SettingsPage> {
       gender: Gender.unknown,
       chronicDiseases: _selectedDiseases,
       medications: _selectedMeds,
-      disability: _selectedDisability,
+      disabilities: _selectedDisabilities,
     );
     await VulnerableGroupService().saveProfile(
       profile: profile,
@@ -175,6 +175,54 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (result != null && mounted) {
       setState(() => _selectedMeds = result);
+    }
+  }
+
+  Future<void> _pickDisabilities() async {
+    final selected = Set<DisabilityStatus>.from(_selectedDisabilities);
+    final result = await showDialog<Set<DisabilityStatus>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('Engellilik Durumu'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: DisabilityStatus.values
+                  .where((d) => d != DisabilityStatus.none)
+                  .map(
+                    (d) => CheckboxListTile(
+                      value: selected.contains(d),
+                      title: Text(_disabilityLabel(d)),
+                      onChanged: (v) {
+                        setLocal(() {
+                          if (v == true) {
+                            selected.add(d);
+                          } else {
+                            selected.remove(d);
+                          }
+                        });
+                      },
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('İptal'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, selected),
+              child: const Text('Tamam'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _selectedDisabilities = result);
     }
   }
 
@@ -441,22 +489,16 @@ class _SettingsPageState extends State<SettingsPage> {
                 'Engellilik Durumu',
                 style: AppTypography.titleMedium(context),
               ),
-              trailing: DropdownButton<DisabilityStatus>(
-                value: _selectedDisability,
-                items: DisabilityStatus.values
-                    .map(
-                      (d) => DropdownMenuItem(
-                        value: d,
-                        child: Text(_disabilityLabel(d)),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (val) {
-                  setState(
-                    () => _selectedDisability = val ?? DisabilityStatus.none,
-                  );
-                },
+              subtitle: Text(
+                _selectedDisabilities.isEmpty
+                    ? 'Belirtilmedi'
+                    : _selectedDisabilities.map(_disabilityLabel).join(', '),
+                style: AppTypography.bodySmall(context).copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _pickDisabilities,
             ),
             Padding(
               padding: const EdgeInsets.symmetric(

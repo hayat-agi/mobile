@@ -24,7 +24,7 @@ void main() {
         gender: Gender.female,
         chronicDiseases: {ChronicDisease.heartDisease},
         medications: {Medication.bloodThinner},
-        disability: DisabilityStatus.mobility,
+        disabilities: {DisabilityStatus.mobility},
       );
 
       await svc.saveProfile(profile: profile, isVulnerableGroup: true);
@@ -40,7 +40,7 @@ void main() {
         svc.profile.medications,
         contains(Medication.bloodThinner),
       );
-      expect(svc.profile.disability, DisabilityStatus.mobility);
+      expect(svc.profile.disabilities, contains(DisabilityStatus.mobility));
     });
   });
 }
