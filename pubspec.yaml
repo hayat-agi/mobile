@@ -67,6 +67,7 @@ dependencies:
   # Battery and brightness management
   battery_plus: ^6.0.0
   screen_brightness: ^0.2.1+1
+  android_id: ^0.5.1
 
 dev_dependencies:
   flutter_test:

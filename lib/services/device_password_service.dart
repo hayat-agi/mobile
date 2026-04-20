@@ -1,4 +1,6 @@
 import 'dart:math';
+import 'package:android_id/android_id.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DevicePasswordService {
@@ -117,11 +119,30 @@ class DevicePasswordService {
 
   static const String _stableDeviceIdKey = 'stable_phone_id';
 
-  /// Returns a stable random ID for this phone installation.
-  /// Generated once and persisted in SharedPreferences.
-  /// Used to register with the ESP32 so the count doesn't grow on reconnects.
+  /// Returns a device ID that survives app reinstalls.
+  ///
+  /// On Android, uses `Settings.Secure.ANDROID_ID` which is stable per
+  /// (signing key + device) — same APK reinstalled on the same phone always
+  /// returns the same value.  Falls back to a SharedPreferences random ID
+  /// on platforms where `android_id` is unavailable.
   Future<String> getOrCreateStableDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // Try platform-provided stable ID first (survives reinstalls).
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        final androidId = await const AndroidId().getId();
+        if (androidId != null && androidId.isNotEmpty) {
+          // Cache it so we don't need the plugin on every connect.
+          await prefs.setString(_stableDeviceIdKey, androidId);
+          return androidId;
+        }
+      } catch (e) {
+        debugPrint('DevicePasswordService: android_id failed — $e');
+      }
+    }
+
+    // Fallback: SharedPreferences random ID (lost on reinstall).
     final existing = prefs.getString(_stableDeviceIdKey);
     if (existing != null && existing.isNotEmpty) return existing;
 
