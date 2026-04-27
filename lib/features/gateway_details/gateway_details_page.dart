@@ -101,7 +101,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Gateway zaten bağlı'),
+              content: Text('Cihaz zaten bağlı'),
               backgroundColor: AppColors.success,
             ),
           );
@@ -192,7 +192,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Gateway\'e başarıyla bağlandı'),
+            content: Text('Cihaza başarıyla bağlandı'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -250,9 +250,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Gateway\'i Kaldır'),
+        title: const Text('Cihazı Kaldır'),
         content: Text(
-          '${gateway.name} gateway\'ini kaldırmak istediğinize emin misiniz?',
+          '${gateway.name} cihazını kaldırmak istediğinize emin misiniz?',
         ),
         actions: [
           TextButton(
@@ -269,7 +269,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                 navigator.pop(); // Go back to dashboard
                 messenger.showSnackBar(
                   SnackBar(
-                    content: const Text('Gateway kaldırıldı'),
+                    content: const Text('Cihaz kaldırıldı'),
                     backgroundColor: AppColors.success,
                   ),
                 );
@@ -298,9 +298,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
 
     if (gateway == null) {
       return AppScaffold(
-        title: 'Gateway Detayları',
+        title: 'Cihaz Detayları',
         body: const Center(
-          child: Text('Gateway bulunamadı'),
+          child: Text('Cihaz bulunamadı'),
         ),
       );
     }
@@ -424,7 +424,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                       const SizedBox(height: AppSpacing.sm),
                       // Remove Button
                       DangerButton(
-                        label: 'Gateway\'i Kaldır',
+                        label: 'Cihazı Kaldır',
                         icon: Icons.delete_outline,
                         isOutlined: true,
                         onPressed: () => _showDeleteDialog(updatedGateway),
@@ -567,9 +567,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         children: [
           _buildInfoRow(
             context: context,
-            label: 'Gateway ID',
+            label: 'Cihaz ID',
             value: gateway.id,
-            onTap: () => _copyToClipboard(gateway.id, 'Gateway ID'),
+            onTap: () => _copyToClipboard(gateway.id, 'Cihaz ID'),
           ),
           const Divider(height: 1),
           if (gateway.macAddress != null) ...[
