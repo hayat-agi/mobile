@@ -1,6 +1,17 @@
 class ApiConfig {
-  // Default to local machine IP for dev. Change for production.
-  static String baseUrl = 'http://192.168.1.10:5000/api'; // Local machine IP for physical phone
+  // Backend API base URL.
+  //
+  // Override at build/run time with --dart-define=API_BASE_URL=https://...
+  // Examples:
+  //   flutter run --dart-define=API_BASE_URL=http://192.168.1.42:5000/api
+  //   flutter build apk --dart-define=API_BASE_URL=https://api.hayatagi.com/api
+  //
+  // The default points at a local-LAN dev backend so a freshly-cloned repo
+  // boots without env wiring; override per machine when your IP differs.
+  static String baseUrl = const String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://192.168.1.10:5000/api',
+  );
 
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 15);
