@@ -142,7 +142,7 @@ class GatewayService {
     // Create new gateway with address
     final gateway = Gateway(
       id: gatewayId.trim(),
-      name: name ?? 'Gateway ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}',
+      name: name ?? 'Cihaz ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}',
       status: GatewayStatus.disconnected,
       batteryLevel: 100,
       lastSeen: DateTime.now(),

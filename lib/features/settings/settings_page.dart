@@ -286,7 +286,7 @@ class _SettingsPageState extends State<SettingsPage> {
               style: AppTypography.titleMedium(context),
             ),
             subtitle: Text(
-              'Gateway durumu ve mesaj bildirimleri',
+              'Cihaz durumu ve mesaj bildirimleri',
               style: AppTypography.bodySmall(context).copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -315,7 +315,7 @@ class _SettingsPageState extends State<SettingsPage> {
               style: AppTypography.titleMedium(context),
             ),
             subtitle: Text(
-              'Kayıtlı gateway\'lere otomatik bağlan',
+              'Kayıtlı cihazlara otomatik bağlan',
               style: AppTypography.bodySmall(context).copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

@@ -402,7 +402,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
               ? (_ctrl.isConnected
                   ? 'Mesaj gönderildi'
                   : 'Kuyruğa alındı — bağlantıda iletilecek')
-              : 'Gateway eklenmemiş — önce bir gateway ekleyin',
+              : 'Cihaz eklenmemiş — önce bir cihaz ekleyin',
         ),
         backgroundColor: success ? AppColors.success : AppColors.danger,
         duration: const Duration(seconds: 2),

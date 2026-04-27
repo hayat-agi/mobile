@@ -272,7 +272,7 @@ class BleConnection extends GetxController {
         await connect(result);
         return isConnected.value;
       }
-      status.value = 'Gateway bulunamadı';
+      status.value = 'Cihaz bulunamadı';
       return false;
     } catch (e) {
       await sub?.cancel();

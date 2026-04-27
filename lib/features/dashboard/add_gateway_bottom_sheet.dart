@@ -562,7 +562,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      'Yeni Gateway Ekle',
+                      'Yeni Hayat Ağı Cihazı Ekle',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     IconButton(
@@ -739,7 +739,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                                   // or fall back to "HayatAğ Gateway" + number
                                   final displayName = rawName.isNotEmpty
                                       ? rawName
-                                      : 'HayatAğ Gateway ${entry.key + 1}';
+                                      : 'Hayat Ağı Cihazı ${entry.key + 1}';
 
                                   // Signal strength indicator
                                   final rssi = result.rssi;
@@ -788,14 +788,14 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                       TextFormField(
                         controller: _gatewayIdController,
                         decoration: const InputDecoration(
-                          labelText: 'Gateway ID *',
-                          hintText: 'Gateway ID\'sini girin veya BLE\'dan seçin',
+                          labelText: 'Cihaz ID *',
+                          hintText: 'Cihaz ID\'sini girin veya BLE\'dan seçin',
                           prefixIcon: Icon(Icons.qr_code_scanner),
                         ),
                         textInputAction: TextInputAction.next,
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
-                            return 'Gateway ID gereklidir';
+                            return 'Cihaz ID gereklidir';
                           }
                           return null;
                         },
@@ -806,8 +806,8 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                       TextFormField(
                         controller: _nameController,
                         decoration: const InputDecoration(
-                          labelText: 'Gateway Adı',
-                          hintText: 'Örn: Ev Gateway, İş Yeri Gateway',
+                          labelText: 'Cihaz Adı',
+                          hintText: 'Örn: Ev Cihazı, İş Yeri Cihazı',
                           prefixIcon: Icon(Icons.label_outline),
                         ),
                         textInputAction: TextInputAction.next,
@@ -969,7 +969,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                       
                       // Submit Button
                       PrimaryButton(
-                        label: 'Gateway Ekle',
+                        label: 'Cihaz Ekle',
                         icon: Icons.add,
                         onPressed: _submit,
                       ),

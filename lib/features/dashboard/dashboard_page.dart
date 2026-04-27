@@ -187,7 +187,7 @@ class _DashboardPageState extends State<DashboardPage> {
     double? longitude,
   ) async {
     final finalName = name ??
-        'Gateway ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}';
+        'Cihaz ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}';
 
     final success = await _gatewayService.addGateway(
       gatewayId,
@@ -208,7 +208,7 @@ class _DashboardPageState extends State<DashboardPage> {
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Gateway eklendi — bağlanılıyor…'),
+            content: const Text('Cihaz eklendi — bağlanılıyor…'),
             backgroundColor: AppColors.success,
           ),
         );
@@ -217,7 +217,7 @@ class _DashboardPageState extends State<DashboardPage> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Bu Gateway zaten ekli veya geçersiz ID'),
+            content: const Text('Bu Cihaz zaten ekli veya geçersiz ID'),
             backgroundColor: AppColors.danger,
           ),
         );
@@ -351,7 +351,7 @@ class _DashboardPageState extends State<DashboardPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddGatewaySheet,
         icon: const Icon(Icons.add),
-        label: const Text('Gateway Ekle'),
+        label: const Text('Cihaz Ekle'),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: ValueListenableBuilder<List<Gateway>>(
@@ -376,7 +376,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       children: [
                         SectionHeader(
                           title: 'Ağ Özeti',
-                          subtitle: 'Gateway durumları ve istatistikler',
+                          subtitle: 'Cihaz durumları ve istatistikler',
                         ),
                         const SizedBox(height: AppSpacing.md),
                         Row(
@@ -428,7 +428,7 @@ class _DashboardPageState extends State<DashboardPage> {
                         TextField(
                           controller: _searchController,
                           decoration: InputDecoration(
-                            hintText: 'Gateway ara...',
+                            hintText: 'Cihaz ara...',
                             prefixIcon: const Icon(Icons.search),
                             suffixIcon: _searchController.text.isNotEmpty
                                 ? IconButton(
@@ -496,7 +496,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Gateway\'ler (${filteredGateways.length})',
+                          'Cihazlar (${filteredGateways.length})',
                           style: AppTypography.headlineSmall(context),
                         ),
                         if (gateways.isNotEmpty)
@@ -521,9 +521,9 @@ class _DashboardPageState extends State<DashboardPage> {
                     hasScrollBody: false,
                     child: EmptyState(
                       icon: Icons.devices_other,
-                      title: 'Henüz gateway eklenmedi',
-                      description: 'Yeni gateway eklemek için sağ alttaki butona tıklayın',
-                      actionLabel: 'Gateway Ekle',
+                      title: 'Henüz cihaz eklenmedi',
+                      description: 'Yeni cihaz eklemek için sağ alttaki butona tıklayın',
+                      actionLabel: 'Cihaz Ekle',
                       onAction: _showAddGatewaySheet,
                     ),
                   )
