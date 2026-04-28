@@ -79,6 +79,8 @@ class BleService {
   /// Use this in GetX pages (with Obx) for reactive state.
   BleConnection get bleConnection => _bleConnection;
 
+  String? get connectedDeviceId => _bleConnection.lastDeviceId;
+
   /// True when the connected ESP32 exposes the external sensor characteristic.
   bool get hasSensorCharacteristic => _bleConnection.hasSensorCharacteristic;
 
@@ -276,6 +278,14 @@ class BleService {
   Future<void> loadAndDrainPendingQueue() async {
     await _bleConnection.loadPendingQueue();
   }
+
+  // ── Queue Cleanup ───────────────────────────────────────────────
+
+  /// Clear the in-memory message queue and persisted SharedPreferences entries
+  /// for a gateway that is being removed. Prevents stale BLE reconnect
+  /// attempts on the next app startup.
+  Future<void> clearQueueForGateway(String gatewayId) =>
+      _bleConnection.clearQueueForGateway(gatewayId);
 
   // ── Lifecycle ───────────────────────────────────────────────────
 

@@ -122,6 +122,7 @@ class BleConnection extends GetxController {
   // ── Queue & Auto-Reconnect state ──
   // Remembers the last device so we can reconnect without scanning.
   String? _lastDeviceId;
+  String? get lastDeviceId => _lastDeviceId;
   // Messages queued while disconnected — drained after reconnect.
   final List<String> _messageQueue = [];
   // Guard flag so only one reconnect+drain cycle runs at a time.
@@ -252,10 +253,6 @@ class BleConnection extends GetxController {
     StreamSubscription<List<ScanResult>>? sub;
 
     try {
-      // Start scan BEFORE attaching the listener so the stream's cached
-      // (stale) results from a previous scan are discarded first.
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
-
       sub = FlutterBluePlus.scanResults.listen((results) {
         for (var r in results) {
           if (r.device.remoteId.str == deviceId) {
@@ -263,8 +260,9 @@ class BleConnection extends GetxController {
           }
         }
       });
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
 
-      final result = await foundC.future.timeout(const Duration(seconds: 6), onTimeout: () => null);
+      final result = await foundC.future.timeout(const Duration(seconds: 5), onTimeout: () => null);
       await sub.cancel();
       await FlutterBluePlus.stopScan();
 
@@ -1052,6 +1050,7 @@ class BleConnection extends GetxController {
 
       if (!_device!.isConnected) throw 'Connection dropped during setup';
 
+      _lastDeviceId = deviceId;
       isConnected.value = true;
       isAuthenticated.value = true;
       status.value = 'Reconnected';
@@ -1103,6 +1102,19 @@ class BleConnection extends GetxController {
         }
       }
     } catch (_) {}
+  }
+
+  /// Clear the pending queue and any stored device reference for a gateway
+  /// that is being removed from the app. Prevents stale reconnect attempts
+  /// on next startup.
+  Future<void> clearQueueForGateway(String deviceId) async {
+    if (_lastDeviceId == deviceId) {
+      _lastDeviceId = null;
+    }
+    _messageQueue.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_queueStorageKey);
+    await prefs.remove(_lastDeviceStorageKey);
   }
 
   /// ── Shared Gateway Help: The Auto-Release Timer ──────────────────────
