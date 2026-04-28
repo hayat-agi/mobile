@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -27,6 +28,7 @@ class GatewayService {
   static const int _locationCheckIntervalDays = 90;
 
   static const String _gatewaysStorageKey = 'persisted_gateways';
+  static const String _householdProfilesStorageKey = 'persisted_household_profiles';
   bool _initialized = false;
 
   /// Syncs gateway statuses when the BLE connection drops unexpectedly.
@@ -80,6 +82,22 @@ class GatewayService {
     } catch (e) {
       debugPrint('GatewayService: failed to load gateways — $e');
     }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final profilesJson = prefs.getString(_householdProfilesStorageKey);
+      if (profilesJson != null && profilesJson.isNotEmpty) {
+        final Map<String, dynamic> jsonMap =
+            jsonDecode(profilesJson) as Map<String, dynamic>;
+        for (final entry in jsonMap.entries) {
+          final profile = HouseholdProfile.fromJson(
+              entry.value as Map<String, dynamic>);
+          _householdProfiles[profile.gatewayId] = profile;
+        }
+      }
+    } catch (e) {
+      debugPrint('GatewayService: failed to load household profiles — $e');
+    }
   }
 
   /// Helper to try connecting once when app starts.
@@ -87,7 +105,7 @@ class GatewayService {
   /// (e.g. first launch) to avoid showing a spurious "Hata" status.
   Future<void> _autoConnectOnStartup(String id) async {
     // Wait a bit for the app to settle
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(Duration(milliseconds: 2000 + Random().nextInt(3000)));
 
     // Don't attempt if BLE permissions haven't been granted yet
     final scanGranted = await Permission.bluetoothScan.isGranted;
@@ -111,6 +129,18 @@ class GatewayService {
       await prefs.setString(_gatewaysStorageKey, jsonEncode(jsonList));
     } catch (e) {
       debugPrint('GatewayService: failed to save gateways — $e');
+    }
+  }
+
+  Future<void> _saveHouseholdProfiles() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonMap = _householdProfiles.map(
+        (key, value) => MapEntry(key, value.toJson()),
+      );
+      await prefs.setString(_householdProfilesStorageKey, jsonEncode(jsonMap));
+    } catch (e) {
+      debugPrint('GatewayService: failed to save household profiles — $e');
     }
   }
 
@@ -167,6 +197,8 @@ class GatewayService {
 
   // Remove a gateway
   Future<void> removeGateway(String gatewayId) async {
+    await DevicePasswordService().removeDevice(gatewayId);
+    await _bleService.clearQueueForGateway(gatewayId);
     gateways.value = gateways.value.where((g) => g.id != gatewayId).toList();
     await _saveGateways();
   }
@@ -196,6 +228,7 @@ class GatewayService {
       final newList = List<Gateway>.from(gateways.value);
       newList[index] = updated;
       gateways.value = newList;
+      _saveGateways();
     }
   }
 
@@ -254,9 +287,16 @@ class GatewayService {
         updateGatewayStatus(gatewayId, GatewayStatus.error);
         return;
       }
-      
+
+      final actualId = _bleService.connectedDeviceId;
+      if (actualId != null && actualId != gatewayId) {
+        updateGatewayBleId(gatewayId, actualId);
+      }
+
+      final effectiveId = (actualId != null && actualId != gatewayId) ? actualId : gatewayId;
+
       // Step 2: Update gateway status
-      final index = gateways.value.indexWhere((g) => g.id == gatewayId);
+      final index = gateways.value.indexWhere((g) => g.id == effectiveId);
       if (index != -1) {
         final updated = gateways.value[index].copyWith(
           status: GatewayStatus.connected,
@@ -271,7 +311,7 @@ class GatewayService {
       // Step 3: Trigger a periodic location check if it's been 6 months.
       // The actual GPS fetch + comparison is done in the UI layer (DashboardPage)
       // so it can show a proper dialog without needing a BuildContext here.
-      _triggerLocationCheckIfDue(gatewayId);
+      _triggerLocationCheckIfDue(effectiveId);
 
       // Step 4: Register this phone with a stable ID (idempotent on the ESP32).
       // Uses a stable random ID stored in SharedPreferences so repeated connects
@@ -283,8 +323,8 @@ class GatewayService {
       // Only devices registered to THIS gateway count — not nearby devices on others.
       final deviceCount = await _bleService.queryDeviceCount();
       if (deviceCount != null) {
-        updateGatewayDeviceCount(gatewayId, deviceCount);
-        DisasterRepository().updateGatewayStats(gatewayId, deviceCount: deviceCount)
+        updateGatewayDeviceCount(effectiveId, deviceCount);
+        DisasterRepository().updateGatewayStats(effectiveId, deviceCount: deviceCount)
             .catchError((Object e) {
           debugPrint('GatewayService: backend device count sync failed — $e');
         });
@@ -355,7 +395,7 @@ class GatewayService {
       priorityScore: profile.calculatePriorityScore(),
     );
     _householdProfiles[profile.gatewayId] = updatedProfile;
-    // TODO: Save to local storage
+    await _saveHouseholdProfiles();
   }
 
   // Get household profile for a gateway
@@ -371,7 +411,7 @@ class GatewayService {
   // Remove household profile
   Future<void> removeHouseholdProfile(String gatewayId) async {
     _householdProfiles.remove(gatewayId);
-    // TODO: Remove from local storage
+    await _saveHouseholdProfiles();
   }
 
   /// Signals the UI to perform a location check if the interval has elapsed.
@@ -431,9 +471,6 @@ class GatewayService {
     });
   }
 
-  void dispose() {
-    gateways.dispose();
-    locationCheckNeeded.dispose();
-  }
+  void dispose() {}
 }
 
