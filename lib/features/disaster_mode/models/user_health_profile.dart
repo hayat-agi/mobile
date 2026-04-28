@@ -136,6 +136,15 @@ class UserHealthProfile {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+        'hasProfile': hasProfile,
+        'age': age.name,
+        'gender': gender.name,
+        'chronicDiseases': chronicDiseases.map((d) => d.name).toList(),
+        'medications': medications.map((m) => m.name).toList(),
+        'disabilities': disabilities.map((d) => d.name).toList(),
+      };
+
   UserHealthProfile copyWith({
     bool? hasProfile,
     AgeRange? age,

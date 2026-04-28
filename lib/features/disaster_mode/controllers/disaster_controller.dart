@@ -5,6 +5,7 @@ import '../models/disaster_message_packet.dart';
 import '../../ble/ble_service.dart';
 import '../../../models/household_profile.dart';
 import '../../../services/gateway_service.dart';
+import '../../../services/device_password_service.dart';
 import '../../../core/api/disaster_repository.dart';
 import '../../user_profile/services/vulnerable_group_service.dart';
 
@@ -80,10 +81,23 @@ class DisasterController extends GetxController {
       final gatewayId =
           savedGateways.isNotEmpty ? savedGateways.first.id : null;
       if (gatewayId != null) {
+        final phoneId = await DevicePasswordService().getOrCreateStableDeviceId();
+        final gateway = GatewayService().getGateway(gatewayId);
         DisasterRepository().reportDisasterEvent(gatewayId, {
           'type': 'manual_message',
           'message': text.trim(),
           'sentAt': DateTime.now().toIso8601String(),
+          'phoneDeviceId': phoneId,
+          'healthProfile': _healthProfile.hasProfile ? _healthProfile.toJson() : null,
+          'household': household?.toJson(),
+          'gateway': {
+            'id': gatewayId,
+            'latitude': gateway?.latitude,
+            'longitude': gateway?.longitude,
+            'address': gateway?.formattedAddress,
+            'buildingType': gateway?.buildingType?.name,
+            'batteryLevel': gateway?.batteryLevel,
+          },
         }).catchError((Object e) {
           debugPrint('DisasterController: backend sync failed — $e');
         });
