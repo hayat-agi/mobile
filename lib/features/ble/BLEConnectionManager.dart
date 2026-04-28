@@ -69,6 +69,10 @@ class BleConnection extends GetxController {
   // notification arrives from the ESP32. Think of it as a one-shot mailbox.
   Completer<String>? _responseCompleter;
 
+  // Serialises concurrent sendHexPayload calls — the second caller waits
+  // for the first to finish rather than superseding it.
+  Completer<void>? _sendLock;
+
   /// Completer for NEED_ACTIVATION — used when adding a new gateway.
   /// Created before subscribe, completed when we receive NEED_ACTIVATION.
   Completer<bool>? _activationPromptCompleter;
@@ -627,10 +631,16 @@ class BleConnection extends GetxController {
       return false;
     }
 
-    // Cancel any previous pending response
-    if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
-      _responseCompleter!.completeError('Superseded');
+    // Wait for any in-flight sendHexPayload to finish before proceeding.
+    if (_sendLock != null) {
+      await _sendLock!.future;
     }
+
+    // Re-check connection after waiting — it may have dropped.
+    if (_rx == null || !isConnected.value) return false;
+
+    final lock = Completer<void>();
+    _sendLock = lock;
 
     // Create a new "mailbox" to wait for the ESP32's response
     _responseCompleter = Completer<String>();
@@ -674,6 +684,11 @@ class BleConnection extends GetxController {
       if (_responseCompleter == completer) {
         _responseCompleter = null;
       }
+      // Release the lock so the next queued sendHexPayload can proceed
+      if (_sendLock == lock) {
+        _sendLock = null;
+      }
+      lock.complete();
     }
   }
 

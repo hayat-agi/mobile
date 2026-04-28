@@ -83,7 +83,7 @@ class DisasterController extends GetxController {
       if (gatewayId != null) {
         final phoneId = await DevicePasswordService().getOrCreateStableDeviceId();
         final gateway = GatewayService().getGateway(gatewayId);
-        DisasterRepository().reportDisasterEvent(gatewayId, {
+        final payload = {
           'type': 'manual_message',
           'message': text.trim(),
           'sentAt': DateTime.now().toIso8601String(),
@@ -98,9 +98,21 @@ class DisasterController extends GetxController {
             'buildingType': gateway?.buildingType?.name,
             'batteryLevel': gateway?.batteryLevel,
           },
-        }).catchError((Object e) {
-          debugPrint('DisasterController: backend sync failed — $e');
-        });
+        };
+        () async {
+          for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+              await DisasterRepository().reportDisasterEvent(gatewayId, payload);
+              return;
+            } catch (e) {
+              if (attempt == 2) {
+                debugPrint('DisasterController: backend sync failed — $e');
+              } else {
+                await Future.delayed(const Duration(seconds: 2));
+              }
+            }
+          }
+        }();
       }
 
       return true;
