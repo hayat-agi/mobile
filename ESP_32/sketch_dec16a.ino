@@ -112,6 +112,53 @@ static bool nvsIsDeviceRegistered(const char* addr) {
   return false;
 }
 
+static bool nvsLooksLikeBleAddress(const String& value) {
+  uint8_t colonCount = 0;
+  for (uint16_t i = 0; i < value.length(); i++) {
+    if (value.charAt(i) == ':') colonCount++;
+  }
+  return colonCount == 5;
+}
+
+// Older firmware registered BLE link addresses on connect. Those entries are
+// transport details, not app users, and made one phone count as two devices.
+static void nvsPruneLegacyBleAddressRegistry() {
+  uint8_t count = nvsGetDeviceCount();
+  if (count == 0) return;
+
+  char key[10];
+  uint8_t writeIndex = 0;
+  uint8_t pruned = 0;
+
+  for (uint8_t readIndex = 0; readIndex < count; readIndex++) {
+    snprintf(key, sizeof(key), "dev_%u", readIndex);
+    String stored = nvs.getString(key, "");
+
+    if (stored.length() == 0 || nvsLooksLikeBleAddress(stored)) {
+      pruned++;
+      continue;
+    }
+
+    if (writeIndex != readIndex) {
+      char dstKey[10];
+      snprintf(dstKey, sizeof(dstKey), "dev_%u", writeIndex);
+      nvs.putString(dstKey, stored);
+    }
+    writeIndex++;
+  }
+
+  for (uint8_t i = writeIndex; i < count; i++) {
+    snprintf(key, sizeof(key), "dev_%u", i);
+    nvs.remove(key);
+  }
+
+  if (pruned > 0) {
+    nvs.putUChar(NVS_KEY_DEV_COUNT, writeIndex);
+    Serial.printf("[REG] Pruned %u legacy BLE address entr%s\n",
+                  pruned, pruned == 1 ? "y" : "ies");
+  }
+}
+
 // Registers addr if not already known. Returns true if newly added.
 static bool nvsRegisterDevice(const char* addr) {
   if (nvsIsDeviceRegistered(addr)) return false;
@@ -679,11 +726,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     clientCount++;
     Serial.printf("[BLE] Client connected (%d total)\n", clientCount);
 
-    // Register this device by its BLE address (idempotent — no-op if already known)
-    std::string addrStr = info.getAddress().toString();
-    nvsRegisterDevice(addrStr.c_str());
-
-    // Tell client whether device needs activation
+    // Tell client whether device needs activation.
     if (!deviceActivated) {
       queueTxMessage("NEED_ACTIVATION");
     }
@@ -750,6 +793,7 @@ void setup() {
   if (nvsInit()) {
     deviceActivated = nvsLoadActivated();
     Serial.printf("[NVS] Device %s\n", deviceActivated ? "ACTIVATED" : "NOT ACTIVATED");
+    nvsPruneLegacyBleAddressRegistry();
 
     // Restore fail/lockout state so power-cycling can't bypass the lockout
     failedAttempts = nvs.getUChar(NVS_KEY_FAIL_CNT, 0);

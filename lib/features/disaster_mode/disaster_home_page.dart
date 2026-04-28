@@ -69,6 +69,14 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   Timer? _inactivityTimer;
   bool _autoSendArmed = true;
 
+  // ── Send concurrency guard (plain bool, not observable) ───────────────
+  bool _isSending = false;
+
+  // ── Inline send-status indicator ──────────────────────────────────────
+  String? _sendStatusMessage;
+  Color _sendStatusColor = Colors.green;
+  Timer? _statusTimer;
+
   @override
   void initState() {
     super.initState();
@@ -110,6 +118,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     BleService().deactivateDisasterMode();
     PFAMessageService().cancelNoResponseTimer();
     _inactivityTimer?.cancel();
+    _statusTimer?.cancel();
     _manualTextController.removeListener(_resetInactivityTimer);
     _manualTextController.dispose();
 
@@ -127,13 +136,16 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   Future<void> _initSpeech() async {
     final available = await _speech.initialize(
-      onError: (_) => setState(() => _isListening = false),
+      onError: (_) {
+        if (mounted) setState(() => _isListening = false);
+      },
       onStatus: (status) {
         if (status == 'done' || status == 'notListening') {
-          setState(() => _isListening = false);
+          if (mounted) setState(() => _isListening = false);
         }
       },
     );
+    if (!mounted) return;
     setState(() => _speechAvailable = available);
   }
 
@@ -156,29 +168,27 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     }
 
     final micPerm = await Permission.microphone.request();
+    if (!mounted) return;
     if (!micPerm.isGranted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Mikrofon izni gerekli'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Mikrofon izni gerekli'),
+          backgroundColor: Colors.red,
+        ),
+      );
       return;
     }
 
     if (!_speechAvailable) {
       await _initSpeech();
+      if (!mounted) return;
       if (!_speechAvailable) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Sesli giriş bu cihazda desteklenmiyor'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sesli giriş bu cihazda desteklenmiyor'),
+            backgroundColor: Colors.orange,
+          ),
+        );
         return;
       }
     }
@@ -305,8 +315,21 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     _inactivityTimer = null;
   }
 
+  void _showSendStatus(String message, Color color) {
+    _statusTimer?.cancel();
+    setState(() {
+      _sendStatusMessage = message;
+      _sendStatusColor = color;
+    });
+    _statusTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _sendStatusMessage = null);
+    });
+  }
+
   /// Fires once after 5 minutes of complete inactivity.
   Future<void> _onInactivityTimeout() async {
+    if (_isSending) return;
+
     // Disarm first — guarantees exactly-once delivery even if this is called
     // concurrently (e.g. dispose race).
     _autoSendArmed = false;
@@ -318,18 +341,16 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     final success = await _ctrl.sendManualMessage(autoMessage);
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          success
-              ? 'Otomatik mesaj gönderildi (5 dk inaktivite)'
-              : 'Otomatik mesaj kuyruğa alındı — bağlantıda iletilecek',
-        ),
-        backgroundColor:
-            success ? AppColors.warning : Colors.grey.shade800,
-        duration: const Duration(seconds: 4),
-      ),
-    );
+    if (success) {
+      _showSendStatus(
+        _ctrl.isConnected
+            ? 'Mesaj iletildi ✓'
+            : 'Mesaj kuyruğa alındı',
+        _ctrl.isConnected ? Colors.green : Colors.orange,
+      );
+    } else {
+      _showSendStatus('Mesaj gönderilemedi', Colors.red);
+    }
   }
 
   // ─── PFA helpers (background only — no UI trigger) ─────────────────
@@ -380,34 +401,37 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   // ─── Send handler ──────────────────────────────────────────────────
 
   Future<void> _onManualSend() async {
+    if (_isSending) return;
     final text = _manualTextController.text.trim();
     if (text.isEmpty) return;
 
     HapticFeedback.lightImpact();
 
-    final success = await _ctrl.sendManualMessage(text);
+    _isSending = true;
+    setState(() {});
+    bool success = false;
+    try {
+      success = await _ctrl.sendManualMessage(text);
+    } finally {
+      _isSending = false;
+      if (mounted) setState(() {});
+    }
 
     if (!mounted) return;
 
     if (success) {
       _manualTextController.clear();
       _onUserMessageSent(text);
-      _disarmAutoSend(); // user is clearly active — auto-send no longer needed
+      if (_ctrl.isConnected) {
+        _disarmAutoSend();
+      }
+      _showSendStatus(
+        _ctrl.isConnected ? 'Mesaj iletildi ✓' : 'Mesaj kuyruğa alındı',
+        _ctrl.isConnected ? Colors.green : Colors.orange,
+      );
+    } else {
+      _showSendStatus('Mesaj gönderilemedi', Colors.red);
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          success
-              ? (_ctrl.isConnected
-                  ? 'Mesaj gönderildi'
-                  : 'Kuyruğa alındı — bağlantıda iletilecek')
-              : 'Cihaz eklenmemiş — önce bir cihaz ekleyin',
-        ),
-        backgroundColor: success ? AppColors.success : AppColors.danger,
-        duration: const Duration(seconds: 2),
-      ),
-    );
   }
 
   // ─── Build ─────────────────────────────────────────────────────────
@@ -581,120 +605,154 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     final borderColor =
         _isListening ? Colors.red.shade400 : Colors.grey.shade600;
 
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade900,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: borderColor, width: _isListening ? 1.5 : 1),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: Theme(
-              // Global [inputDecorationTheme] uses filled light surfaces;
-              // disaster screen uses dark scaffold — merged theme made text
-              // white on a light fill (invisible). Override fully here.
-              data: Theme.of(context).copyWith(
-                textSelectionTheme: const TextSelectionThemeData(
-                  cursorColor: AppColors.primary,
-                  selectionColor: Color(0x663B82F6),
-                  selectionHandleColor: AppColors.primary,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 300),
+          child: _sendStatusMessage != null
+              ? Padding(
+                  key: ValueKey(_sendStatusMessage),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    _sendStatusMessage!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _sendStatusColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(key: ValueKey('empty')),
+        ),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade900,
+            borderRadius: BorderRadius.circular(16),
+            border:
+                Border.all(color: borderColor, width: _isListening ? 1.5 : 1),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Theme(
+                  // Global [inputDecorationTheme] uses filled light surfaces;
+                  // disaster screen uses dark scaffold — merged theme made text
+                  // white on a light fill (invisible). Override fully here.
+                  data: Theme.of(context).copyWith(
+                    textSelectionTheme: const TextSelectionThemeData(
+                      cursorColor: AppColors.primary,
+                      selectionColor: Color(0x663B82F6),
+                      selectionHandleColor: AppColors.primary,
+                    ),
+                  ),
+                  child: TextField(
+                    controller: _manualTextController,
+                    minLines: 3,
+                    maxLines: 6,
+                    keyboardType: TextInputType.multiline,
+                    style: const TextStyle(
+                      color: _messageInputTextColor,
+                      fontSize: 16,
+                      height: 1.35,
+                    ),
+                    decoration: InputDecoration(
+                      isDense: false,
+                      filled: true,
+                      fillColor: _messageInputFillColor,
+                      hintText:
+                          _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
+                      hintStyle: TextStyle(
+                        color: _isListening
+                            ? Colors.red.shade700
+                            : const Color(0xFF64748B),
+                        fontSize: 16,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 14,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: Color(0xFFCBD5E1),
+                          width: 1,
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: AppColors.primary,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                    textInputAction: TextInputAction.newline,
+                    onSubmitted: (_) => _onManualSend(),
+                  ),
                 ),
               ),
-              child: TextField(
-                controller: _manualTextController,
-                minLines: 3,
-                maxLines: 6,
-                keyboardType: TextInputType.multiline,
-                style: const TextStyle(
-                  color: _messageInputTextColor,
-                  fontSize: 16,
-                  height: 1.35,
-                ),
-                decoration: InputDecoration(
-                  isDense: false,
-                  filled: true,
-                  fillColor: _messageInputFillColor,
-                  hintText:
-                      _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
-                  hintStyle: TextStyle(
+              const SizedBox(width: 8),
+
+              // Voice-to-text mic button
+              GestureDetector(
+                onTap: _toggleListening,
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
                     color: _isListening
-                        ? Colors.red.shade700
-                        : const Color(0xFF64748B),
-                    fontSize: 16,
+                        ? Colors.red.withValues(alpha: 0.25)
+                        : Colors.grey.shade800,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 14,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: Color(0xFFCBD5E1),
-                      width: 1,
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: AppColors.primary,
-                      width: 2,
-                    ),
+                  child: Icon(
+                    _isListening ? Icons.mic : Icons.mic_none,
+                    size: 24,
+                    color: _isListening ? Colors.red : Colors.white70,
                   ),
                 ),
-                textInputAction: TextInputAction.newline,
-                onSubmitted: (_) => _onManualSend(),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
+              const SizedBox(width: 6),
 
-          // Voice-to-text mic button
-          GestureDetector(
-            onTap: _toggleListening,
-            child: Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _isListening
-                    ? Colors.red.withValues(alpha: 0.25)
-                    : Colors.grey.shade800,
+              // Send button — disabled and shows spinner while sending
+              GestureDetector(
+                onTap: _isSending ? null : _onManualSend,
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.success
+                        .withValues(alpha: _isSending ? 0.10 : 0.25),
+                  ),
+                  child: _isSending
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.success,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.send_rounded,
+                          size: 24,
+                          color: AppColors.success,
+                        ),
+                ),
               ),
-              child: Icon(
-                _isListening ? Icons.mic : Icons.mic_none,
-                size: 24,
-                color: _isListening ? Colors.red : Colors.white70,
-              ),
-            ),
+            ],
           ),
-          const SizedBox(width: 6),
-
-          // Send button
-          GestureDetector(
-            onTap: _onManualSend,
-            child: Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.success.withValues(alpha: 0.25),
-              ),
-              child: const Icon(
-                Icons.send_rounded,
-                size: 24,
-                color: AppColors.success,
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
