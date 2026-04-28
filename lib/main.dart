@@ -14,13 +14,16 @@ void main() async {
   // Initialize auth (check stored token)
   await AuthService().initialize();
 
-  // Start earthquake detection using phone sensors (default mode).
-  EarthquakeDetectionService().start();
+  // Phone-sensor fallback disabled: caused false positives (truck rumble, door
+  // slams, washing machines) when ESP32 was not connected. Re-enable once
+  // stationarity / gyro thresholds are tuned for phone-based detection.
+  //
+  // EarthquakeDetectionService().start();
 
   // Auto-switch earthquake detection source when the ESP32 connects/disconnects.
   // When connected and the ESP32 exposes the sensor characteristic, the
   // external MPU-6050 stream replaces the phone accelerometer.
-  // When disconnected, the service falls back to the phone sensors automatically.
+  // When disconnected, reverts to phone sensors — currently disabled above.
   final bleService = BleService();
   final eqService = EarthquakeDetectionService();
 
@@ -30,9 +33,10 @@ void main() async {
       // ESP32 just connected — switch to external MPU-6050 stream
       eqService.startExternal(bleService.sensorStream);
     } else if (connected) {
-      // ESP32 connected but no sensor char — keep phone sensors running
+      // ESP32 connected but no sensor char — do nothing (phone fallback off)
     } else {
-      // ESP32 disconnected — revert to phone sensors
+      // ESP32 disconnected — would revert to phone sensors, but fallback is
+      // disabled; stop external and leave detection idle until reconnect.
       eqService.stopExternal();
     }
   });
