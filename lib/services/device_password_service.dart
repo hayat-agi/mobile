@@ -128,12 +128,13 @@ class DevicePasswordService {
   Future<String> getOrCreateStableDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Try platform-provided stable ID first (survives reinstalls).
+    final existing = prefs.getString(_stableDeviceIdKey);
+    if (existing != null && existing.isNotEmpty) return existing;
+
     if (defaultTargetPlatform == TargetPlatform.android) {
       try {
         final androidId = await const AndroidId().getId();
         if (androidId != null && androidId.isNotEmpty) {
-          // Cache it so we don't need the plugin on every connect.
           await prefs.setString(_stableDeviceIdKey, androidId);
           return androidId;
         }
@@ -142,16 +143,16 @@ class DevicePasswordService {
       }
     }
 
-    // Fallback: SharedPreferences random ID (lost on reinstall).
-    final existing = prefs.getString(_stableDeviceIdKey);
-    if (existing != null && existing.isNotEmpty) return existing;
-
-    final rng = Random.secure();
-    final id = List.generate(16, (_) => rng.nextInt(256))
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
+    final id = _generateRandomId();
     await prefs.setString(_stableDeviceIdKey, id);
     return id;
+  }
+
+  String _generateRandomId() {
+    final rng = Random.secure();
+    return List.generate(16, (_) => rng.nextInt(256))
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
   }
 }
 
