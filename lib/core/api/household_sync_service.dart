@@ -18,6 +18,7 @@ class HouseholdSyncService {
 
       if (backendGateway == null) return false;
 
+      // TODO(backend): Replace delete-all-recreate with ownership-aware upsert when backend supports per-user citizens.
       // Remove existing citizens and pets first, then re-add
       for (final citizen in backendGateway.citizens) {
         if (citizen.id != null) {
