@@ -18,6 +18,10 @@ class GatewayRepository {
     return BackendGateway.fromJson(gatewayData);
   }
 
+  Future<void> deleteGateway(String gatewayId) async {
+    await _apiClient.delete(ApiConfig.updateGateway(gatewayId));
+  }
+
   Future<void> addCitizen(String gatewayId, Map<String, dynamic> citizenData) async {
     await _apiClient.post(ApiConfig.gatewayCitizens(gatewayId), data: citizenData);
   }

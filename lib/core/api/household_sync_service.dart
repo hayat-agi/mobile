@@ -54,22 +54,21 @@ class HouseholdSyncService {
   }
 
   Map<String, dynamic> _memberToCitizenData(HouseholdMember member) {
-    // Map local name to backend fullname
-    // Estimate birthDate from age
     final now = DateTime.now();
-    final estimatedBirthYear = now.year - member.age;
-    final estimatedBirthDate = DateTime(estimatedBirthYear, 1, 1).toIso8601String();
+    final estimatedBirthDate = DateTime(now.year - member.age, 1, 1).toIso8601String();
+    final birthDate = (member.birthDate != null && member.birthDate!.isNotEmpty)
+        ? member.birthDate!
+        : estimatedBirthDate;
 
     return {
       'fullname': member.name,
-      'birthDate': estimatedBirthDate,
+      'birthDate': birthDate,
+      'age': member.age,
       if (member.tcNumber != null) 'tcNumber': member.tcNumber,
       if (member.gender != null) 'gender': member.gender,
       if (member.bloodType != null) 'bloodType': member.bloodType,
-      'medicalConditions': [
-        ...member.medicalConditions,
-        ...member.specialNeeds,
-      ],
+      'medicalConditions': member.medicalConditions,
+      'specialNeeds': member.specialNeeds,
       if (member.medications != null) 'medications': member.medications,
       if (member.prosthetics != null) 'prosthetics': member.prosthetics,
     };

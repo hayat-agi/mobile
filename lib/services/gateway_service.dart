@@ -8,6 +8,7 @@ import '../models/gateway.dart';
 import '../models/household_profile.dart';
 import '../features/ble/ble_service.dart';
 import '../core/api/disaster_repository.dart';
+import '../core/api/gateway_repository.dart';
 import 'device_password_service.dart';
 
 class GatewayService {
@@ -192,6 +193,23 @@ class GatewayService {
     gateways.value = [...gateways.value, gateway];
     await _saveGateways();
 
+    GatewayRepository().createGateway({
+      'id': gateway.id,
+      'name': gateway.name,
+      if (gateway.buildingType != null) 'buildingType': gateway.buildingType!.name,
+      if (gateway.street != null) 'street': gateway.street,
+      if (gateway.buildingNumber != null) 'buildingNumber': gateway.buildingNumber,
+      if (gateway.doorNumber != null) 'doorNumber': gateway.doorNumber,
+      if (gateway.neighborhood != null) 'neighborhood': gateway.neighborhood,
+      if (gateway.district != null) 'district': gateway.district,
+      if (gateway.city != null) 'city': gateway.city,
+      if (gateway.postalCode != null) 'postalCode': gateway.postalCode,
+      if (gateway.latitude != null) 'latitude': gateway.latitude,
+      if (gateway.longitude != null) 'longitude': gateway.longitude,
+    }).catchError((Object e) {
+      debugPrint('GatewayService: backend gateway create failed — $e');
+    });
+
     return true;
   }
 
@@ -199,6 +217,9 @@ class GatewayService {
   Future<void> removeGateway(String gatewayId) async {
     await DevicePasswordService().removeDevice(gatewayId);
     await _bleService.clearQueueForGateway(gatewayId);
+    GatewayRepository().deleteGateway(gatewayId).catchError((Object e) {
+      debugPrint('GatewayService: backend gateway delete failed — $e');
+    });
     gateways.value = gateways.value.where((g) => g.id != gatewayId).toList();
     await _saveGateways();
   }
