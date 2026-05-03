@@ -88,6 +88,9 @@ class BleConnection extends GetxController {
     if (response == BleConstants.respMsgBadChecksum) {
       return 'Paket reddedildi: checksum hatası';
     }
+    if (response == BleConstants.respMsgQueueFull) {
+      return 'ESP32 gönderim kuyruğu dolu — biraz sonra tekrar deneyin';
+    }
     return null;
   }
 
@@ -490,6 +493,9 @@ class BleConnection extends GetxController {
         _reconnectAndDrainQueue();
         return;
       }
+      // No saved gateway — message cannot be queued, log it visibly
+      messages.add('[System] Gateway bulunamadı — mesaj gönderilemedi: $text');
+      debugPrint('[BLE] send() dropped (no lastDeviceId): $text');
       return;
     }
 
@@ -952,10 +958,19 @@ class BleConnection extends GetxController {
           // is the first thing retried on the next connection.
           _messageQueue.insert(0, msg);
           _persistQueue();
-          messages.add('[System] Gönderim başarısız — mesaj yeniden kuyruğa alındı');
+          messages.add('[System] Gönderim zaman aşımı — mesaj yeniden kuyruğa alındı');
           break; // Stop this drain cycle; reconnect will retry
-        } else if (response != BleConstants.respMsgOk) {
-          messages.add('ESP32: $response');
+        } else if (response == BleConstants.respMsgOk) {
+          // success — already removed from queue
+        } else {
+          final packetError = _packetAckError(response);
+          if (packetError != null) {
+            // Packet was malformed/oversized — not a transient error, don't retry
+            messages.add('[System] $packetError');
+            debugPrint('[Queue] Message rejected ($response), dropping: $msg');
+          } else {
+            messages.add('ESP32: $response');
+          }
         }
       }
 
@@ -1187,7 +1202,15 @@ class BleConnection extends GetxController {
 
     // Encode as hex and queue with full retry/persistence support
     final hex = payload.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    await send('BIN:$hex');
+    final encoded = 'BIN:$hex';
+
+    // Warn when the encoded string exceeds the MTU — ESP32 will reject it
+    // with MSG_BAD_LEN, which is now handled gracefully in the drain loop.
+    if (encoded.length > BleConstants.maxMtu) {
+      debugPrint('[BLE] Warning: encoded payload ${encoded.length} bytes exceeds MTU ${BleConstants.maxMtu} — ESP32 will reject with MSG_BAD_LEN');
+    }
+
+    await send(encoded);
   }
 
   /// Registers this phone with the ESP32 using a stable app-provided ID.
