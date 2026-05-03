@@ -194,7 +194,10 @@ class GatewayService {
     await _saveGateways();
 
     GatewayRepository().createGateway({
-      'id': gateway.id,
+      // Backend requires unique serialNumber. Use the BLE MAC as the canonical
+      // device serial — same value the backend's disaster-events lookup falls
+      // back to when :id isn't a Mongo ObjectId.
+      'serialNumber': gateway.id,
       'name': gateway.name,
       if (gateway.buildingType != null) 'buildingType': gateway.buildingType!.name,
       if (gateway.street != null) 'street': gateway.street,
