@@ -74,6 +74,28 @@ struct TxRingBuffer {
 static TxRingBuffer txRing;
 static portMUX_TYPE txRingMux = portMUX_INITIALIZER_UNLOCKED;
 
+// ─── Battery & Status Config ─────────────────────────────────────────────────
+
+static const uint8_t  BAT_ADC_PIN  = 34;       // GPIO34 — LiPo via 1:1 voltage divider (adjust per board)
+static const uint32_t BAT_CACHE_MS = 300000UL; // re-read ADC at most every 5 min
+
+static const uint32_t STATUS_BAT_INTERVAL_MS  = 300000UL; // 5 min  — full bat+rssi STATUS
+static const uint32_t STATUS_RSSI_INTERVAL_MS = 30000UL;  // 30 s   — rssi-only STATUS (cheap, no ADC)
+
+// ADC thresholds — tune for your voltage divider and board
+// Default: 1:1 divider, ADC_11db attenuation, 12-bit (0–4095)
+static const uint32_t BAT_ADC_EMPTY = 1575;  // ≈ 3.0 V at battery terminal (0%)
+static const uint32_t BAT_ADC_FULL  = 2200;  // ≈ 4.2 V at battery terminal (100%)
+
+// Updated by lora_link.cpp after every successful lora_receive_packet — declare
+// as a global so lora_link.cpp can write it via: extern int8_t lora_last_rssi;
+int8_t lora_last_rssi = 0;
+
+static uint8_t  s_cachedBat      = 100;
+static uint32_t s_lastBatReadMs  = 0;
+static uint32_t s_lastBatStatMs  = 0;
+static uint32_t s_lastRssiStatMs = 0;
+
 static void txRingInit(TxRingBuffer& rb) {
   rb.head = rb.tail = rb.count = 0;
 }
@@ -113,6 +135,42 @@ static void queueTxMessage(const char* msg) {
   if (!txRingPush(txRing, msg)) {
     Serial.println("[TX] Ring buffer full — message dropped");
   }
+}
+
+static uint8_t readBatteryPercent() {
+  uint32_t raw = 0;
+  for (uint8_t i = 0; i < 4; i++) raw += analogRead(BAT_ADC_PIN);
+  raw >>= 2;  // average 4 samples to reduce noise
+  if (raw <= BAT_ADC_EMPTY) return 0;
+  if (raw >= BAT_ADC_FULL)  return 100;
+  return (uint8_t)((raw - BAT_ADC_EMPTY) * 100UL / (BAT_ADC_FULL - BAT_ADC_EMPTY));
+}
+
+static uint8_t getBatteryPercent() {
+  uint32_t now = millis();
+  if (s_lastBatReadMs == 0 || now - s_lastBatReadMs >= BAT_CACHE_MS) {
+    s_cachedBat     = readBatteryPercent();
+    s_lastBatReadMs = now;
+  }
+  return s_cachedBat;
+}
+
+// Queues "MSG_OK:bat=X,rssi=Y" — piggybacks status on every ack, zero extra BLE traffic
+static void queueMsgOkWithStatus() {
+  char buf[TX_MSG_MAX_LEN];
+  snprintf(buf, sizeof(buf), "MSG_OK:bat=%u,rssi=%d", getBatteryPercent(), (int)lora_last_rssi);
+  queueTxMessage(buf);
+}
+
+// Queues "STATUS:bat=X,rssi=Y" (includeBat=true) or "STATUS:rssi=Y" (false, no ADC read)
+static void queueStatusUpdate(bool includeBat) {
+  char buf[TX_MSG_MAX_LEN];
+  if (includeBat) {
+    snprintf(buf, sizeof(buf), "STATUS:bat=%u,rssi=%d", getBatteryPercent(), (int)lora_last_rssi);
+  } else {
+    snprintf(buf, sizeof(buf), "STATUS:rssi=%d", (int)lora_last_rssi);
+  }
+  queueTxMessage(buf);
 }
 
 static bool isPrintablePayload(const Packet& p) {
@@ -348,7 +406,7 @@ private:
       // forwardToLoRa blocking'dir (ACK_TIMEOUT_MS x MAX_TX_RETRIES = 6sn max),
       // mobil uygulamanın 5sn responseTimeout'u bu sürede dolup BLE bağlantısını
       // kesebilir. "MSG_OK" = "mesaj bu node'a ulaştı, LoRa'ya iletilecek" garantisi.
-      queueTxMessage("MSG_OK");
+      queueMsgOkWithStatus();
       forwardToLoRa(input);
       return;
     }
@@ -379,7 +437,7 @@ private:
 
     // 4. Device registration — acknowledge locally, skip LoRa flood
     if (input.rfind("REGISTER:", 0) == 0) {
-      queueTxMessage("MSG_OK");
+      queueMsgOkWithStatus();
       Serial.printf("[CMD] REGISTER intercepted: %s\n", input.c_str());
       return;
     }
@@ -393,7 +451,7 @@ private:
         return;
       }
       // MSG_OK önce gönder (aynı sebep: forwardToLoRa blocking)
-      queueTxMessage("MSG_OK");
+      queueMsgOkWithStatus();
       forwardToLoRa(input);
     }
   }
@@ -465,6 +523,9 @@ void setup() {
   routing_init();
   dupdet_init();
   sf_init();
+
+  // ADC_11db: 0–3.9 V range (needed for battery voltage via divider)
+  analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
 
   uint32_t now = millis();
   routing_add_or_update(
@@ -540,6 +601,18 @@ void loop() {
   if (now_ms - last_hb >= 5000) {
       last_hb = now_ms;
       DBG_PRINTF("[HB] Node alive, millis=%u\n", now_ms);
+  }
+
+  // ── Periodic status: RSSI every 30s (no ADC), full bat+rssi every 5min ──
+  if (clientCount > 0 && txSubscribedCount > 0) {
+    if (now_ms - s_lastBatStatMs >= STATUS_BAT_INTERVAL_MS) {
+      queueStatusUpdate(true);   // reads ADC (cached), queues STATUS:bat=X,rssi=Y
+      s_lastBatStatMs  = now_ms;
+      s_lastRssiStatMs = now_ms; // reset RSSI timer — no need for rssi-only until next 30s
+    } else if (now_ms - s_lastRssiStatMs >= STATUS_RSSI_INTERVAL_MS) {
+      queueStatusUpdate(false);  // no ADC read, queues STATUS:rssi=Y
+      s_lastRssiStatMs = now_ms;
+    }
   }
 
   // Try to receive a packet with a small timeout to not block too long

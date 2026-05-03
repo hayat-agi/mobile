@@ -81,6 +81,29 @@ class BleConnection extends GetxController {
   /// On disconnect, we delay cancelling the completer so ACTIVATED can arrive.
   bool _isWaitingForActivationResponse = false;
 
+  /// Fired when the ESP32 reports battery and/or RSSI via MSG_OK: or STATUS: prefix.
+  /// deviceId = BLE MAC of the connected gateway, bat/rssi null if not in message.
+  void Function(String deviceId, int? bat, int? rssi)? onStatusUpdate;
+
+  /// Parses "MSG_OK:bat=82,rssi=-65", "STATUS:bat=82,rssi=-65", or "STATUS:rssi=-65".
+  void _tryParseStatus(String msg) {
+    final colonIdx = msg.indexOf(':');
+    if (colonIdx < 0) return;
+    final payload = msg.substring(colonIdx + 1);
+    int? bat;
+    int? rssi;
+    for (final part in payload.split(',')) {
+      if (part.startsWith('bat=')) {
+        bat = int.tryParse(part.substring(4));
+      } else if (part.startsWith('rssi=')) {
+        rssi = int.tryParse(part.substring(5));
+      }
+    }
+    if ((bat != null || rssi != null) && _lastDeviceId != null) {
+      onStatusUpdate?.call(_lastDeviceId!, bat, rssi);
+    }
+  }
+
   String? _packetAckError(String response) {
     if (response == BleConstants.respMsgBadLen) {
       return 'Paket reddedildi: uzunluk hatası';
@@ -443,6 +466,10 @@ class BleConnection extends GetxController {
       _lastDeviceId = r.device.remoteId.str;
       _intentionalDisconnect = false;
 
+      // Seed signal strength with BLE scan RSSI so UI shows something immediately.
+      // Will be overwritten by LoRa RSSI once ESP32 firmware sends STATUS: updates.
+      onStatusUpdate?.call(_lastDeviceId!, null, r.rssi);
+
       // Start the timer to free the gateway if we don't do anything
       _resetAutoReleaseTimer();
       _startHeartbeat();
@@ -802,11 +829,26 @@ class BleConnection extends GetxController {
       return;
     }
 
+    // Unsolicited STATUS update — parse and fire callback, no completer to complete
+    if (msg.startsWith(BleConstants.respStatusPrefix)) {
+      _tryParseStatus(msg);
+      return;
+    }
+
+    // MSG_OK with status suffix — extract status, deliver clean 'MSG_OK' to waiters
+    final String deliverMsg;
+    if (msg.startsWith('${BleConstants.respMsgOk}:')) {
+      _tryParseStatus(msg);
+      deliverMsg = BleConstants.respMsgOk;
+    } else {
+      deliverMsg = msg;
+    }
+
     // If we're waiting for a response (completer is active), deliver it
     if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
-      _responseCompleter!.complete(msg);
+      _responseCompleter!.complete(deliverMsg);
     } else {
-      messages.add('ESP32: $msg');
+      messages.add('ESP32: $deliverMsg');
     }
   }
 
@@ -1265,8 +1307,16 @@ class BleConnection extends GetxController {
       try {
         final response = await _writeAndWaitResponse('PING', timeout: _pingTimeout);
         if (response == 'PONG') {
-          _heartbeatFailCount = 0; // connection is healthy
+          _heartbeatFailCount = 0;
           debugPrint('[Heartbeat] PONG received — connection healthy');
+          // Read BLE RSSI on every successful heartbeat so signal stays live.
+          // Overwritten by LoRa RSSI once ESP32 firmware sends STATUS: updates.
+          try {
+            if (_device != null && _lastDeviceId != null) {
+              final rssi = await _device!.readRssi();
+              onStatusUpdate?.call(_lastDeviceId!, null, rssi);
+            }
+          } catch (_) {}
         } else {
           _heartbeatFailCount++;
           debugPrint('[Heartbeat] No PONG (got: $response) — fail $_heartbeatFailCount/$_maxHeartbeatFails');

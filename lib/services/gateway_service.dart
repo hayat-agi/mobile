@@ -59,6 +59,12 @@ class GatewayService {
     // Keep gateway statuses in sync with real BLE connection state
     _bleService.isConnected.addListener(_onBleConnectionChanged);
 
+    // Live battery/RSSI updates from ESP32 — fired on MSG_OK piggyback and periodic STATUS
+    _bleService.setStatusUpdateCallback((deviceId, bat, rssi) {
+      if (bat != null) updateGatewayBattery(deviceId, bat);
+      if (rssi != null) updateGatewaySignal(deviceId, rssi);
+    });
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final jsonString = prefs.getString(_gatewaysStorageKey);

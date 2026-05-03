@@ -13,6 +13,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        // flutter_local_notifications v21+ requires core library desugaring.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -41,4 +43,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Required for flutter_local_notifications v21+ on Java 11 projects.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

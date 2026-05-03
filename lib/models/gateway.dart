@@ -53,6 +53,14 @@ class Gateway {
   bool get isLowBattery => batteryLevel < 20;
   bool get hasGoodSignal => signalStrength != null && signalStrength! > -70;
 
+  String get signalQualityLabel {
+    if (signalStrength == null) return 'N/A';
+    if (signalStrength! >= -60) return 'Mükemmel';
+    if (signalStrength! >= -70) return 'İyi';
+    if (signalStrength! >= -80) return 'Orta';
+    return 'Zayıf';
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,
