@@ -39,6 +39,9 @@ class BleConstants {
   static const String respMsgBadChecksum = 'MSG_BAD_CSUM';
   static const String respMsgQueueFull = 'MSG_QUEUE_FULL';
 
+  /// Unsolicited status update — "STATUS:bat=82,rssi=-65" or "STATUS:rssi=-65"
+  static const String respStatusPrefix = 'STATUS:';
+
   /// "Reset OK" — the ESP32 accepted the factory reset command
   static const String respResetOk = 'RESET_OK';
 

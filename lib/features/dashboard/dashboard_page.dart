@@ -643,10 +643,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 _buildMetricChip(
                   context: context,
                   icon: Icons.signal_cellular_alt,
-                  label: '${gateway.signalStrength} dBm',
-                  color: gateway.hasGoodSignal
+                  label: gateway.signalQualityLabel,
+                  color: gateway.signalStrength! >= -60
                       ? AppColors.success
-                      : AppColors.warning,
+                      : gateway.signalStrength! >= -80
+                          ? AppColors.warning
+                          : AppColors.danger,
                 ),
               if (gateway.connectedDeviceCount != null) ...[
                 const SizedBox(width: AppSpacing.sm),

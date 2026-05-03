@@ -81,6 +81,12 @@ class BleService {
 
   String? get connectedDeviceId => _bleConnection.lastDeviceId;
 
+  /// Register a callback that fires whenever the ESP32 reports battery/RSSI status.
+  /// Called with the gateway's BLE MAC and nullable bat/rssi values.
+  void setStatusUpdateCallback(void Function(String deviceId, int? bat, int? rssi) cb) {
+    _bleConnection.onStatusUpdate = cb;
+  }
+
   /// True when the connected ESP32 exposes the external sensor characteristic.
   bool get hasSensorCharacteristic => _bleConnection.hasSensorCharacteristic;
 

@@ -503,13 +503,17 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
           child: _buildHealthMetric(
             context: context,
             icon: Icons.signal_cellular_alt,
-            label: 'Sinyal',
-            value: gateway.signalStrength != null
-                ? '${gateway.signalStrength} dBm'
-                : 'N/A',
-            color: gateway.signalStrength != null
-                ? (gateway.hasGoodSignal ? AppColors.success : AppColors.warning)
-                : AppColors.textSecondaryLight,
+            label: gateway.signalStrength != null
+                ? 'Sinyal · ${gateway.signalStrength} dBm'
+                : 'Sinyal',
+            value: gateway.signalQualityLabel,
+            color: gateway.signalStrength == null
+                ? AppColors.textSecondaryLight
+                : gateway.signalStrength! >= -60
+                    ? AppColors.success
+                    : gateway.signalStrength! >= -80
+                        ? AppColors.warning
+                        : AppColors.danger,
             progress: gateway.signalStrength != null
                 ? ((gateway.signalStrength! + 100) / 50).clamp(0.0, 1.0)
                 : 0.0,
