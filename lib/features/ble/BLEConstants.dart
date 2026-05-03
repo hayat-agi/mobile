@@ -37,6 +37,7 @@ class BleConstants {
   static const String respMsgOk = 'MSG_OK';
   static const String respMsgBadLen = 'MSG_BAD_LEN';
   static const String respMsgBadChecksum = 'MSG_BAD_CSUM';
+  static const String respMsgQueueFull = 'MSG_QUEUE_FULL';
 
   /// "Reset OK" — the ESP32 accepted the factory reset command
   static const String respResetOk = 'RESET_OK';
@@ -84,8 +85,9 @@ class BleConstants {
   /// How long to wait for a BLE connection before giving up
   static const Duration connectTimeout = Duration(seconds: 20);
 
-  /// How long to wait for an ESP32 response after sending a message
-  static const Duration responseTimeout = Duration(seconds: 5);
+  /// How long to wait for an ESP32 response after sending a message.
+  /// LoRa forwarding can take several seconds on slow air-rate modules.
+  static const Duration responseTimeout = Duration(seconds: 10);
 
   /// Longer timeout for activation — ESP32 sends ACTIVATED then reboots
   static const Duration activationResponseTimeout = Duration(seconds: 8);
