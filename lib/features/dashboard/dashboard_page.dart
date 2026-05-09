@@ -460,17 +460,35 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Widget _buildFilterChip(String label, String value) {
     final isSelected = _filterStatus == value;
-    return FilterChip(
-      label: Text(label, maxLines: 1, overflow: TextOverflow.visible),
-      selected: isSelected,
-      showCheckmark: false,
-      visualDensity: VisualDensity.compact,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      onSelected: (selected) {
-        setState(() {
-          _filterStatus = value;
-        });
-      },
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: () => setState(() => _filterStatus = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppColors.primary
+              : isDark
+              ? AppColors.surfaceVariantDark
+              : Colors.white,
+          borderRadius: BorderRadius.circular(50),
+          border: isSelected
+              ? null
+              : Border.all(color: AppColors.sterlingGray),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected
+                ? Colors.white
+                : isDark
+                ? AppColors.textPrimaryDark
+                : AppColors.midnightInk,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+            fontSize: 14,
+          ),
+        ),
+      ),
     );
   }
 
@@ -551,7 +569,14 @@ class _DashboardPageState extends State<DashboardPage> {
 
     return Row(
       children: [
-        Icon(icon, color: color, size: 24),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: color, size: 20),
+        ),
         const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Column(
@@ -578,59 +603,58 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildSearchAndFiltersCard(BuildContext context) {
-    return ModernCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Standalone pill search bar
+        Container(
+          decoration: BoxDecoration(
+            color: isDark
+                ? AppColors.surfaceVariantDark
+                : AppColors.surfaceVariantLight,
+            borderRadius: BorderRadius.circular(50),
+          ),
+          child: TextField(
             controller: _searchController,
             decoration: InputDecoration(
               hintText: 'Cihaz ara...',
-              prefixIcon: const Icon(Icons.search),
+              prefixIcon: Icon(
+                Icons.search,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
               suffixIcon: _searchController.text.isNotEmpty
                   ? IconButton(
                       icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        setState(() {
-                          _searchController.clear();
-                        });
-                      },
+                      onPressed: () => setState(() => _searchController.clear()),
                     )
                   : null,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 14),
             ),
             onChanged: (_) => setState(() {}),
           ),
-          const SizedBox(height: AppSpacing.md),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+        const SizedBox(height: AppSpacing.md),
+        // Pill filter chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
             children: [
-              Expanded(
-                child: Wrap(
-                  spacing: AppSpacing.sm,
-                  runSpacing: AppSpacing.sm,
-                  children: [
-                    _buildFilterChip('Tümü', 'all'),
-                    _buildFilterChip('Bağlı', 'connected'),
-                    _buildFilterChip('Kesik', 'disconnected'),
-                    _buildFilterChip('Düşük Batarya', 'lowBattery'),
-                  ],
-                ),
-              ),
+              _buildFilterChip('Tümü', 'all'),
               const SizedBox(width: AppSpacing.sm),
-              IconButton(
-                icon: const Icon(Icons.sort),
-                tooltip: 'Sırala',
-                onPressed: () {
-                  // TODO: Show sort bottom sheet
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Sıralama yakında eklenecek')),
-                  );
-                },
-              ),
+              _buildFilterChip('Bağlı', 'connected'),
+              const SizedBox(width: AppSpacing.sm),
+              _buildFilterChip('Kesik', 'disconnected'),
+              const SizedBox(width: AppSpacing.sm),
+              _buildFilterChip('Düşük Batarya', 'lowBattery'),
             ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
