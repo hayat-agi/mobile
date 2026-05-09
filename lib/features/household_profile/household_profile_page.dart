@@ -400,13 +400,6 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
 
     return AppScaffold(
       title: 'Hane Profili',
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.save_outlined),
-          onPressed: _saveProfile,
-          tooltip: 'Kaydet',
-        ),
-      ],
       bottomNavigationBar: bottomNav,
       body: Form(
         key: _formKey,
