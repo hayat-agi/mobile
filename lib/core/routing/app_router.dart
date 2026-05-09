@@ -8,6 +8,7 @@ import '../../features/messages/messages_page.dart';
 import '../../features/settings/settings_page.dart';
 import '../../features/settings/profile_edit_page.dart';
 import '../../features/settings/issue_report_page.dart';
+import '../../features/settings/vulnerable_group_profile_page.dart';
 import '../../features/gateway_details/gateway_details_page.dart';
 import '../../features/household_profile/household_profile_page.dart';
 
@@ -21,47 +22,66 @@ class AppRouter {
   static const String settings = '/settings';
   static const String profileEdit = '/profile-edit';
   static const String issueReport = '/issue-report';
+  static const String vulnerableGroupProfile = '/vulnerable-group-profile';
   static const String gatewayDetails = '/gateway-details';
   static const String householdProfile = '/household-profile';
+
+  static List<Route<dynamic>> generateInitialRoutes(String initialRouteName) {
+    return [generateRoute(RouteSettings(name: initialRouteName))];
+  }
+
+  static MaterialPageRoute<dynamic> _page(
+    RouteSettings settings,
+    WidgetBuilder builder,
+  ) {
+    return MaterialPageRoute(settings: settings, builder: builder);
+  }
 
   static Route<dynamic> generateRoute(RouteSettings routeSettings) {
     switch (routeSettings.name) {
       case onboarding:
-        return MaterialPageRoute(builder: (_) => const OnboardingPage());
+        return _page(routeSettings, (_) => const OnboardingPage());
       case login:
-        return MaterialPageRoute(builder: (_) => const LoginPage());
+        return _page(routeSettings, (_) => const LoginPage());
       case register:
-        return MaterialPageRoute(builder: (_) => const RegisterPage());
+        return _page(routeSettings, (_) => const RegisterPage());
       case dashboard:
-        return MaterialPageRoute(builder: (_) => const DashboardPage());
+        return _page(routeSettings, (_) => const DashboardPage());
       case disasterHome:
         final autoTriggered = routeSettings.arguments as bool? ?? false;
-        return MaterialPageRoute(
-          builder: (_) => DisasterHomePage(autoTriggered: autoTriggered),
+        return _page(
+          routeSettings,
+          (_) => DisasterHomePage(autoTriggered: autoTriggered),
         );
       case messages:
-        return MaterialPageRoute(builder: (_) => const MessagesPage());
+        return _page(routeSettings, (_) => const MessagesPage());
       case settings:
-        return MaterialPageRoute(builder: (_) => const SettingsPage());
+        return _page(routeSettings, (_) => const SettingsPage());
       case profileEdit:
-        return MaterialPageRoute(builder: (_) => const ProfileEditPage());
+        final isInitialSetup = routeSettings.arguments as bool? ?? false;
+        return _page(
+          routeSettings,
+          (_) => ProfileEditPage(isInitialSetup: isInitialSetup),
+        );
       case issueReport:
-        return MaterialPageRoute(builder: (_) => const IssueReportPage());
+        return _page(routeSettings, (_) => const IssueReportPage());
+      case vulnerableGroupProfile:
+        return _page(routeSettings, (_) => const VulnerableGroupProfilePage());
       case gatewayDetails:
         final gatewayId = routeSettings.arguments as String;
-        return MaterialPageRoute(
-          builder: (_) => GatewayDetailsPage(gatewayId: gatewayId),
+        return _page(
+          routeSettings,
+          (_) => GatewayDetailsPage(gatewayId: gatewayId),
         );
       case householdProfile:
-        final gatewayId = routeSettings.arguments as String;
-        return MaterialPageRoute(
-          builder: (_) => HouseholdProfilePage(gatewayId: gatewayId),
+        final args = routeSettings.arguments;
+        final gatewayId = args is String ? args : null;
+        return _page(
+          routeSettings,
+          (_) => HouseholdProfilePage(gatewayId: gatewayId),
         );
       default:
-        return MaterialPageRoute(
-          builder: (_) => const DashboardPage(),
-        );
+        return _page(routeSettings, (_) => const DashboardPage());
     }
   }
 }
-

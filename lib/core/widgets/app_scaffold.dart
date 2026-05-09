@@ -10,6 +10,7 @@ class AppScaffold extends StatelessWidget {
   final Widget body;
   final Widget? floatingActionButton;
   final FloatingActionButtonLocation? floatingActionButtonLocation;
+  final Widget? bottomNavigationBar;
   final bool extendBodyBehindAppBar;
   final Color? backgroundColor;
 
@@ -20,6 +21,7 @@ class AppScaffold extends StatelessWidget {
     required this.body,
     this.floatingActionButton,
     this.floatingActionButtonLocation,
+    this.bottomNavigationBar,
     this.extendBodyBehindAppBar = false,
     this.backgroundColor,
   });
@@ -45,16 +47,17 @@ class AppScaffold extends StatelessWidget {
           // Theme already sets elevation 0 and correct colors; this ensures
           // no tint is applied even when content scrolls beneath the bar.
           surfaceTintColor: Colors.transparent,
-          backgroundColor:
-              isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
-          foregroundColor:
-              isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight,
+          backgroundColor: isDark
+              ? AppColors.surfaceDark
+              : AppColors.surfaceLight,
+          foregroundColor: isDark
+              ? AppColors.textPrimaryDark
+              : AppColors.textPrimaryLight,
         ),
-        body: SafeArea(
-          child: body,
-        ),
+        body: SafeArea(child: body),
         floatingActionButton: floatingActionButton,
         floatingActionButtonLocation: floatingActionButtonLocation,
+        bottomNavigationBar: bottomNavigationBar,
       ),
     );
   }

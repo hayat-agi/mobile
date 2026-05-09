@@ -19,23 +19,33 @@ class _DisasterModeObserver extends NavigatorObserver {
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    if (_isDisasterRoute(route)) _activate();
+    if (_isDisasterRoute(route)) {
+      _activate();
+    }
   }
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
-    if (_isDisasterRoute(newRoute)) _activate();
-    if (_isDisasterRoute(oldRoute) && !_isDisasterRoute(newRoute)) _deactivate();
+    if (_isDisasterRoute(newRoute)) {
+      _activate();
+    }
+    if (_isDisasterRoute(oldRoute) && !_isDisasterRoute(newRoute)) {
+      _deactivate();
+    }
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    if (_isDisasterRoute(route)) _deactivate();
+    if (_isDisasterRoute(route)) {
+      _deactivate();
+    }
   }
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    if (_isDisasterRoute(route)) _deactivate();
+    if (_isDisasterRoute(route)) {
+      _deactivate();
+    }
   }
 }
 
@@ -54,14 +64,18 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
-    _earthquakeSub =
-        EarthquakeDetectionService().detectionStream.listen((event) {
+    _earthquakeSub = EarthquakeDetectionService().detectionStream.listen((
+      event,
+    ) {
       final ctx = _navigatorKey.currentContext;
       if (ctx == null || !ctx.mounted) return;
       // Don't show dialog if already on disaster home
       final route = ModalRoute.of(ctx);
       if (route?.settings.name == AppRouter.disasterHome) return;
-      EarthquakeConfirmDialog.show(ctx, event); // ignore: use_build_context_synchronously
+      EarthquakeConfirmDialog.show(
+        ctx,
+        event,
+      ); // ignore: use_build_context_synchronously
     });
   }
 
@@ -84,6 +98,7 @@ class _MyAppState extends State<MyApp> {
       navigatorKey: _navigatorKey,
       navigatorObservers: [_disasterObserver],
       onGenerateRoute: AppRouter.generateRoute,
+      onGenerateInitialRoutes: AppRouter.generateInitialRoutes,
       initialRoute: isAuthenticated ? AppRouter.dashboard : AppRouter.login,
       debugShowCheckedModeBanner: false,
     );
