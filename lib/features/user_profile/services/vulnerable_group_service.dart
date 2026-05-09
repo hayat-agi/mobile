@@ -63,6 +63,37 @@ class VulnerableGroupService {
     );
   }
 
+  // ── Per-member profile storage ───────────────────────────────────────────
+
+  static String _memberKey(String gatewayId, String memberName) =>
+      'vg_m_${gatewayId}_${memberName.replaceAll(' ', '_')}';
+
+  Future<(UserHealthProfile, bool)> loadMemberProfile(
+    String gatewayId,
+    String memberName,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _memberKey(gatewayId, memberName);
+    final isVulnerable = prefs.getBool('${key}_v') ?? false;
+    final bytesJson = prefs.getString('${key}_p');
+    if (bytesJson == null) return (UserHealthProfile.empty(), isVulnerable);
+    final list = (jsonDecode(bytesJson) as List).cast<int>();
+    final profile = UserHealthProfile.fromBytes(Uint8List.fromList(list));
+    return (profile, isVulnerable);
+  }
+
+  Future<void> saveMemberProfile(
+    String gatewayId,
+    String memberName,
+    UserHealthProfile profile,
+    bool isVulnerable,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _memberKey(gatewayId, memberName);
+    await prefs.setBool('${key}_v', isVulnerable);
+    await prefs.setString('${key}_p', jsonEncode(profile.toBytes().toList()));
+  }
+
   Future<void> updateLocation() async {
     try {
       final pos = await Geolocator.getCurrentPosition(
