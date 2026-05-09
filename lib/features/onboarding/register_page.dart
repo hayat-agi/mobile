@@ -48,7 +48,12 @@ class _RegisterPageState extends State<RegisterPage> {
         password: _passwordController.text,
       );
       if (mounted) {
-        Navigator.pushReplacementNamed(context, AppRouter.dashboard);
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          AppRouter.profileEdit,
+          arguments: true,
+          (_) => false,
+        );
       }
     } on ApiException catch (e) {
       if (mounted) {
@@ -60,8 +65,9 @@ class _RegisterPageState extends State<RegisterPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Bağlantı hatası'),
-              backgroundColor: Colors.red),
+            content: Text('Bağlantı hatası'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -190,11 +196,14 @@ class _RegisterPageState extends State<RegisterPage> {
                       labelText: 'Şifre',
                       prefixIcon: const Icon(Icons.lock_outlined),
                       suffixIcon: IconButton(
-                        icon: Icon(_obscurePassword
-                            ? Icons.visibility_off
-                            : Icons.visibility),
-                        onPressed: () =>
-                            setState(() => _obscurePassword = !_obscurePassword),
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
                       ),
                     ),
                     obscureText: _obscurePassword,
@@ -220,14 +229,13 @@ class _RegisterPageState extends State<RegisterPage> {
                   const SizedBox(height: AppSpacing.md),
                   TextButton(
                     onPressed: () {
-                      Navigator.pushReplacementNamed(
-                          context, AppRouter.login);
+                      Navigator.pushReplacementNamed(context, AppRouter.login);
                     },
                     child: Text(
                       'Zaten hesabınız var mı? Giriş yapın',
-                      style: AppTypography.bodyMedium(context).copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+                      style: AppTypography.bodyMedium(
+                        context,
+                      ).copyWith(color: Theme.of(context).colorScheme.primary),
                     ),
                   ),
                 ],

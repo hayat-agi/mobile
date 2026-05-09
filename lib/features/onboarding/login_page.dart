@@ -38,7 +38,11 @@ class _LoginPageState extends State<LoginPage> {
         _passwordController.text,
       );
       if (mounted) {
-        Navigator.pushReplacementNamed(context, AppRouter.dashboard);
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          AppRouter.dashboard,
+          (_) => false,
+        );
       }
     } on ApiException catch (e) {
       if (mounted) {
@@ -50,8 +54,9 @@ class _LoginPageState extends State<LoginPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Bağlantı hatası'),
-              backgroundColor: Colors.red),
+            content: Text('Bağlantı hatası'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
@@ -118,11 +123,14 @@ class _LoginPageState extends State<LoginPage> {
                       labelText: 'Şifre',
                       prefixIcon: const Icon(Icons.lock_outlined),
                       suffixIcon: IconButton(
-                        icon: Icon(_obscurePassword
-                            ? Icons.visibility_off
-                            : Icons.visibility),
-                        onPressed: () =>
-                            setState(() => _obscurePassword = !_obscurePassword),
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
                       ),
                     ),
                     obscureText: _obscurePassword,
@@ -146,13 +154,15 @@ class _LoginPageState extends State<LoginPage> {
                   TextButton(
                     onPressed: () {
                       Navigator.pushReplacementNamed(
-                          context, AppRouter.register);
+                        context,
+                        AppRouter.register,
+                      );
                     },
                     child: Text(
                       'Hesabınız yok mu? Kayıt olun',
-                      style: AppTypography.bodyMedium(context).copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+                      style: AppTypography.bodyMedium(
+                        context,
+                      ).copyWith(color: Theme.of(context).colorScheme.primary),
                     ),
                   ),
                 ],
