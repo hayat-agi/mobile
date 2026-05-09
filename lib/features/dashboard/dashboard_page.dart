@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../core/routing/app_router.dart';
+import '../../core/widgets/app_bottom_nav_bar.dart';
 import '../../core/widgets/app_scaffold.dart';
-import '../../core/widgets/stat_card.dart';
 import '../../core/widgets/modern_card.dart';
 import '../../core/widgets/status_pill.dart';
-import '../../core/widgets/section_header.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_colors.dart';
@@ -77,7 +76,9 @@ class _DashboardPageState extends State<DashboardPage> {
   /// to review the address. Always records the check date when done.
   Future<void> _performLocationCheck(String gatewayId) async {
     final gateway = _gatewayService.getGateway(gatewayId);
-    if (gateway == null || gateway.latitude == null || gateway.longitude == null) {
+    if (gateway == null ||
+        gateway.latitude == null ||
+        gateway.longitude == null) {
       _gatewayService.markLocationChecked(gatewayId);
       return;
     }
@@ -114,10 +115,12 @@ class _DashboardPageState extends State<DashboardPage> {
         position.longitude,
       );
 
-      debugPrint('[LocationCheck] gateway="${gateway.name}" '
-          'stored=(${gateway.latitude}, ${gateway.longitude}) '
-          'current=(${position.latitude}, ${position.longitude}) '
-          'distance=${distanceMeters.toStringAsFixed(1)}m');
+      debugPrint(
+        '[LocationCheck] gateway="${gateway.name}" '
+        'stored=(${gateway.latitude}, ${gateway.longitude}) '
+        'current=(${position.latitude}, ${position.longitude}) '
+        'distance=${distanceMeters.toStringAsFixed(1)}m',
+      );
 
       // Mark checked regardless of outcome so we don't nag on every connect
       _gatewayService.markLocationChecked(gatewayId);
@@ -186,7 +189,8 @@ class _DashboardPageState extends State<DashboardPage> {
     double? latitude,
     double? longitude,
   ) async {
-    final finalName = name ??
+    final finalName =
+        name ??
         'Cihaz ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}';
 
     final success = await _gatewayService.addGateway(
@@ -334,29 +338,27 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    final stats = _gatewayService.getStatistics();
-    final avgBattery = _gatewayService.getAverageBattery();
     final theme = Theme.of(context);
 
     return AppScaffold(
       title: 'Hayat Ağı',
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.settings_outlined),
-          onPressed: () {
-            Navigator.pushNamed(context, AppRouter.settings);
-          },
-        ),
-      ],
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddGatewaySheet,
-        icon: const Icon(Icons.add),
-        label: const Text('Cihaz Ekle'),
+      bottomNavigationBar: const AppBottomNavBar(currentItem: AppNavItem.home),
+      floatingActionButton: ValueListenableBuilder<List<Gateway>>(
+        valueListenable: _gatewayService.gateways,
+        builder: (context, gateways, _) {
+          if (gateways.isEmpty) return const SizedBox.shrink();
+          return FloatingActionButton.extended(
+            onPressed: _showAddGatewaySheet,
+            icon: const Icon(Icons.add),
+            label: const Text('Cihaz Ekle'),
+          );
+        },
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: ValueListenableBuilder<List<Gateway>>(
         valueListenable: _gatewayService.gateways,
         builder: (context, gateways, _) {
+          final stats = _gatewayService.getStatistics();
           final filteredGateways = _getFilteredGateways();
 
           return RefreshIndicator(
@@ -367,117 +369,19 @@ class _DashboardPageState extends State<DashboardPage> {
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
-                // Network Summary Section
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.all(AppSpacing.screenPadding),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SectionHeader(
-                          title: 'Ağ Özeti',
-                          subtitle: 'Cihaz durumları ve istatistikler',
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: StatCard(
-                                label: 'Toplam',
-                                value: stats['total'].toString(),
-                                icon: Icons.devices,
-                                iconColor: AppColors.primary,
-                              ),
-                            ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Expanded(
-                              child: StatCard(
-                                label: 'Aktif',
-                                value: stats['connected'].toString(),
-                                icon: Icons.check_circle,
-                                iconColor: AppColors.success,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        StatCard(
-                          label: 'Ortalama Batarya',
-                          value: '${avgBattery.toInt()}%',
-                          icon: Icons.battery_charging_full,
-                          iconColor: avgBattery > 50
-                              ? AppColors.success
-                              : avgBattery > 20
-                                  ? AppColors.warning
-                                  : AppColors.danger,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                // Search and Filter Section
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.screenPadding,
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.screenPadding,
+                      AppSpacing.screenPadding,
+                      AppSpacing.screenPadding,
+                      AppSpacing.md,
                     ),
                     child: Column(
                       children: [
-                        // Search Bar
-                        TextField(
-                          controller: _searchController,
-                          decoration: InputDecoration(
-                            hintText: 'Cihaz ara...',
-                            prefixIcon: const Icon(Icons.search),
-                            suffixIcon: _searchController.text.isNotEmpty
-                                ? IconButton(
-                                    icon: const Icon(Icons.clear),
-                                    onPressed: () {
-                                      setState(() {
-                                        _searchController.clear();
-                                      });
-                                    },
-                                  )
-                                : null,
-                          ),
-                          onChanged: (_) => setState(() {}),
-                        ),
+                        _buildNetworkSummaryCard(context, stats),
                         const SizedBox(height: AppSpacing.md),
-
-                        // Filter and Sort Chips
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  children: [
-                                    _buildFilterChip('Tümü', 'all'),
-                                    const SizedBox(width: AppSpacing.xs),
-                                    _buildFilterChip('Bağlı', 'connected'),
-                                    const SizedBox(width: AppSpacing.xs),
-                                    _buildFilterChip('Kesik', 'disconnected'),
-                                    const SizedBox(width: AppSpacing.xs),
-                                    _buildFilterChip('Düşük Batarya', 'lowBattery'),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.sort),
-                              tooltip: 'Sırala',
-                              onPressed: () {
-                                // TODO: Show sort bottom sheet
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Sıralama yakında eklenecek'),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
+                        _buildSearchAndFiltersCard(context),
                       ],
                     ),
                   ),
@@ -502,7 +406,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         if (gateways.isNotEmpty)
                           TextButton.icon(
                             onPressed: () {
-                              Navigator.pushNamed(context, AppRouter.disasterHome);
+                              Navigator.pushNamed(
+                                context,
+                                AppRouter.disasterHome,
+                              );
                             },
                             icon: const Icon(Icons.warning_amber_rounded),
                             label: const Text('Afet Modu'),
@@ -522,7 +429,8 @@ class _DashboardPageState extends State<DashboardPage> {
                     child: EmptyState(
                       icon: Icons.devices_other,
                       title: 'Henüz cihaz eklenmedi',
-                      description: 'Yeni cihaz eklemek için sağ alttaki butona tıklayın',
+                      description:
+                          'Yeni cihaz eklemek için sağ alttaki butona tıklayın',
                       actionLabel: 'Cihaz Ekle',
                       onAction: _showAddGatewaySheet,
                     ),
@@ -533,16 +441,13 @@ class _DashboardPageState extends State<DashboardPage> {
                       horizontal: AppSpacing.screenPadding,
                     ),
                     sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final gateway = filteredGateways[index];
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                            child: _buildGatewayCard(gateway, theme),
-                          );
-                        },
-                        childCount: filteredGateways.length,
-                      ),
+                      delegate: SliverChildBuilderDelegate((context, index) {
+                        final gateway = filteredGateways[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                          child: _buildGatewayCard(gateway, theme),
+                        );
+                      }, childCount: filteredGateways.length),
                     ),
                   ),
               ],
@@ -556,13 +461,176 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _buildFilterChip(String label, String value) {
     final isSelected = _filterStatus == value;
     return FilterChip(
-      label: Text(label),
+      label: Text(label, maxLines: 1, overflow: TextOverflow.visible),
       selected: isSelected,
+      showCheckmark: false,
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       onSelected: (selected) {
         setState(() {
           _filterStatus = value;
         });
       },
+    );
+  }
+
+  Widget _buildNetworkSummaryCard(
+    BuildContext context,
+    Map<String, int> stats,
+  ) {
+    final theme = Theme.of(context);
+
+    return ModernCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.hub_outlined, color: theme.colorScheme.primary),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Ağ Özeti', style: AppTypography.titleLarge(context)),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      'Cihaz durumları ve istatistikler',
+                      style: AppTypography.bodySmall(
+                        context,
+                      ).copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          Row(
+            children: [
+              Expanded(
+                child: _buildSummaryMetric(
+                  context: context,
+                  label: 'Toplam',
+                  value: stats['total'].toString(),
+                  icon: Icons.devices_outlined,
+                  color: AppColors.primary,
+                ),
+              ),
+              SizedBox(
+                height: 44,
+                child: VerticalDivider(
+                  width: AppSpacing.lg,
+                  color: theme.colorScheme.outline.withValues(alpha: 0.35),
+                ),
+              ),
+              Expanded(
+                child: _buildSummaryMetric(
+                  context: context,
+                  label: 'Aktif',
+                  value: stats['connected'].toString(),
+                  icon: Icons.check_circle_outline,
+                  color: AppColors.success,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryMetric({
+    required BuildContext context,
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 24),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: AppTypography.headlineSmall(
+                  context,
+                ).copyWith(color: color, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                label,
+                style: AppTypography.bodySmall(
+                  context,
+                ).copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchAndFiltersCard(BuildContext context) {
+    return ModernCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: 'Cihaz ara...',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        setState(() {
+                          _searchController.clear();
+                        });
+                      },
+                    )
+                  : null,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: [
+                    _buildFilterChip('Tümü', 'all'),
+                    _buildFilterChip('Bağlı', 'connected'),
+                    _buildFilterChip('Kesik', 'disconnected'),
+                    _buildFilterChip('Düşük Batarya', 'lowBattery'),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              IconButton(
+                icon: const Icon(Icons.sort),
+                tooltip: 'Sırala',
+                onPressed: () {
+                  // TODO: Show sort bottom sheet
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Sıralama yakında eklenecek')),
+                  );
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -607,9 +675,9 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       'ID: ${gateway.id}',
-                      style: AppTypography.bodySmall(context).copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                      style: AppTypography.bodySmall(
+                        context,
+                      ).copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -634,8 +702,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 color: gateway.batteryLevel > 50
                     ? AppColors.success
                     : gateway.batteryLevel > 20
-                        ? AppColors.warning
-                        : AppColors.danger,
+                    ? AppColors.warning
+                    : AppColors.danger,
               ),
               const SizedBox(width: AppSpacing.sm),
               // Signal
@@ -647,8 +715,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   color: gateway.signalStrength! >= -60
                       ? AppColors.success
                       : gateway.signalStrength! >= -80
-                          ? AppColors.warning
-                          : AppColors.danger,
+                      ? AppColors.warning
+                      : AppColors.danger,
                 ),
               if (gateway.connectedDeviceCount != null) ...[
                 const SizedBox(width: AppSpacing.sm),
@@ -664,9 +732,9 @@ class _DashboardPageState extends State<DashboardPage> {
               if (gateway.lastSeen != null)
                 Text(
                   _formatLastSeen(gateway.lastSeen!),
-                  style: AppTypography.bodySmall(context).copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+                  style: AppTypography.bodySmall(
+                    context,
+                  ).copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
             ],
           ),
@@ -687,7 +755,7 @@ class _DashboardPageState extends State<DashboardPage> {
         vertical: AppSpacing.xs,
       ),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -697,10 +765,9 @@ class _DashboardPageState extends State<DashboardPage> {
           const SizedBox(width: AppSpacing.xs),
           Text(
             label,
-            style: AppTypography.labelSmall(context).copyWith(
-              color: color,
-              fontWeight: FontWeight.w600,
-            ),
+            style: AppTypography.labelSmall(
+              context,
+            ).copyWith(color: color, fontWeight: FontWeight.w600),
           ),
         ],
       ),
