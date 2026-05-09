@@ -67,6 +67,20 @@ class StaLtaCalculator {
     return _currentRatio;
   }
 
+  /// Pre-fill LTA with a synthetic quiet baseline so detection works immediately
+  /// without waiting 30 s for the LTA window to fill organically.
+  /// Used by [EarthquakeDetectionService.startExternal] when the ESP32 connects.
+  void primeWithQuietBaseline(double backgroundLevel) {
+    assert(_ltaBuffer.isEmpty, 'call reset() before primeWithQuietBaseline()');
+    final level = backgroundLevel < EarthquakeConfig.noiseFloorMs2
+        ? EarthquakeConfig.minLtaAverage
+        : backgroundLevel;
+    for (int i = 0; i < EarthquakeConfig.ltaWindowSamples; i++) {
+      _ltaBuffer.addLast(level);
+      _ltaSum += level;
+    }
+  }
+
   void reset() {
     _staBuffer.clear();
     _ltaBuffer.clear();
