@@ -80,11 +80,11 @@ class EarthquakeConfig {
   /// Synthetic LTA baseline used when priming the STA/LTA window on ESP32 connect.
   ///
   /// MPU-6050 at ±2g on a table with ambient vibration (fans, HVAC, footsteps)
-  /// reads netAcc ≈ 0.05–0.15 m/s². Priming with [minLtaAverage] (0.03) creates
+  /// reads netAcc ≈ 0.03–0.08 m/s². Priming with [minLtaAverage] (0.03) creates
   /// a denominator that is too low — any mild vibration immediately yields ratio > 2.8.
-  /// 0.08 matches a realistic quiet-but-not-silent environment and prevents
-  /// false positives from ordinary ambient noise on the ESP32 board.
-  static const double externalSensorBaselineMs2 = 0.08;
+  /// 0.05 is a balanced midpoint: suppresses ambient noise false positives while
+  /// still allowing real seismic events (netAcc ≥ 0.15 m/s²) to reach ratio > 2.8.
+  static const double externalSensorBaselineMs2 = 0.05;
 
   // ── Feature extraction (IQR / ZC / CAV) ─────────────────────────────────────
 

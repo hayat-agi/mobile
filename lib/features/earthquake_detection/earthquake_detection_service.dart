@@ -343,7 +343,10 @@ class EarthquakeDetectionService {
     // ── Pre-filter check: gyroscope veto ───────────────────────────────────
     // Earthquakes = translational only. Human handling = rotational.
     // Skip this check during replay (no gyro data in CSV).
-    if (!isReplaying.value &&
+    // NOTE: Also skipped for external stream — real deployment testing requires
+    // hand-shaking the ESP32; re-enable (!_usingExternalStream &&) when field-testing
+    // with actual seismic events is possible.
+    if (!isReplaying.value && !_usingExternalStream &&
         _gyroAboveCount >= (EarthquakeConfig.gyroscopeWindowSamples * 0.20).ceil()) {
       if (monitorState.value == EarthquakeMonitorState.suspicious) {
         monitorState.value = EarthquakeMonitorState.monitoring;
