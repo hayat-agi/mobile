@@ -3,7 +3,11 @@ import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
 
-/// Status pill/badge component
+/// Status pill / badge component.
+///
+/// Background tint and foreground color are derived from the semantic palette.
+/// Border radius is kept at 8px (closest to the navigation token) to keep the
+/// pill shape compact while still following the design system.
 class StatusPill extends StatelessWidget {
   final String label;
   final StatusType type;
@@ -20,7 +24,6 @@ class StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final colors = _getColors(context);
 
     return Container(
@@ -57,45 +60,46 @@ class StatusPill extends StatelessWidget {
 
   Map<String, Color> _getColors(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // Light: 10% tint background / Dark: 20% tint background; border at 30%
+    final bgAlpha = isDark ? 0.2 : 0.1;
+    const borderAlpha = 0.3;
 
     switch (type) {
       case StatusType.success:
         return {
-          'background': isDark
-              ? AppColors.success.withOpacity(0.2)
-              : AppColors.success.withOpacity(0.1),
+          'background': AppColors.success.withValues(alpha: bgAlpha),
           'foreground': AppColors.success,
-          'border': AppColors.success.withOpacity(0.3),
+          'border': AppColors.success.withValues(alpha: borderAlpha),
         };
       case StatusType.warning:
+        // Warning uses Warning Orange for palette harmony
         return {
-          'background': isDark
-              ? AppColors.warning.withOpacity(0.2)
-              : AppColors.warning.withOpacity(0.1),
+          'background': AppColors.warning.withValues(alpha: bgAlpha),
           'foreground': AppColors.warning,
-          'border': AppColors.warning.withOpacity(0.3),
+          'border': AppColors.warning.withValues(alpha: borderAlpha),
         };
       case StatusType.danger:
         return {
-          'background': isDark
-              ? AppColors.danger.withOpacity(0.2)
-              : AppColors.danger.withOpacity(0.1),
+          'background': AppColors.danger.withValues(alpha: bgAlpha),
           'foreground': AppColors.danger,
-          'border': AppColors.danger.withOpacity(0.3),
+          'border': AppColors.danger.withValues(alpha: borderAlpha),
         };
       case StatusType.info:
+        // Info uses Action Blue for palette harmony
         return {
-          'background': isDark
-              ? AppColors.info.withOpacity(0.2)
-              : AppColors.info.withOpacity(0.1),
+          'background': AppColors.info.withValues(alpha: bgAlpha),
           'foreground': AppColors.info,
-          'border': AppColors.info.withOpacity(0.3),
+          'border': AppColors.info.withValues(alpha: borderAlpha),
         };
       case StatusType.neutral:
         return {
-          'background': Theme.of(context).colorScheme.surfaceContainerHighest,
-          'foreground': Theme.of(context).colorScheme.onSurfaceVariant,
-          'border': Theme.of(context).colorScheme.outline.withOpacity(0.3),
+          'background': isDark ? AppColors.surfaceVariantDark : AppColors.ghostFog,
+          'foreground': isDark
+              ? AppColors.textSecondaryDark
+              : AppColors.textSecondaryLight,
+          'border': isDark
+              ? AppColors.outlineDark.withValues(alpha: borderAlpha)
+              : AppColors.sterlingGray.withValues(alpha: borderAlpha),
         };
     }
   }
@@ -108,4 +112,3 @@ enum StatusType {
   info,
   neutral,
 }
-

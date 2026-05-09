@@ -72,10 +72,10 @@ class _LoginPageState extends State<LoginPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
-                    Icons.wifi_tethering,
-                    size: 80,
-                    color: Theme.of(context).colorScheme.primary,
+                  Image.asset(
+                    'assets/images/logo.png',
+                    height: 120,
+                    fit: BoxFit.contain,
                   ),
                   const SizedBox(height: AppSpacing.lg),
                   Text(
