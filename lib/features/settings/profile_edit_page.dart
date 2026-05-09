@@ -3,6 +3,7 @@ import '../../core/auth/auth_service.dart';
 import '../../core/api/user_repository.dart';
 import '../../core/api/metadata_repository.dart';
 import '../../core/network/api_exception.dart';
+import '../../core/routing/app_router.dart';
 import '../../models/system_options.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
@@ -10,7 +11,9 @@ import '../../core/theme/app_colors.dart';
 import '../../core/widgets/primary_button.dart';
 
 class ProfileEditPage extends StatefulWidget {
-  const ProfileEditPage({super.key});
+  final bool isInitialSetup;
+
+  const ProfileEditPage({super.key, this.isInitialSetup = false});
 
   @override
   State<ProfileEditPage> createState() => _ProfileEditPageState();
@@ -34,6 +37,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   SystemOptions _options = SystemOptions.defaults();
   bool _isLoading = false;
   bool _isSaving = false;
+
+  String get _pageTitle =>
+      widget.isInitialSetup ? 'Profil Bilgileri' : 'Profil Düzenle';
 
   @override
   void initState() {
@@ -67,9 +73,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       _selectedProsthetics = List<String>.from(user.prosthetics);
 
       if (user.emergencyContact != null) {
-        _emergencyNameController.text = user.emergencyContact!['fullname'] ?? '';
+        _emergencyNameController.text =
+            user.emergencyContact!['fullname'] ?? '';
         _emergencyPhoneController.text = user.emergencyContact!['phone'] ?? '';
-        _emergencyRelationController.text = user.emergencyContact!['relation'] ?? '';
+        _emergencyRelationController.text =
+            user.emergencyContact!['relation'] ?? '';
       }
     }
 
@@ -109,7 +117,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
             backgroundColor: AppColors.success,
           ),
         );
-        Navigator.pop(context);
+        if (widget.isInitialSetup) {
+          Navigator.pushNamedAndRemoveUntil(
+            context,
+            AppRouter.dashboard,
+            (route) => false,
+          );
+        } else {
+          Navigator.pop(context);
+        }
       }
     } on ApiException catch (e) {
       if (mounted) {
@@ -147,13 +163,13 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
     if (_isLoading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Profil Düzenle')),
+        appBar: AppBar(title: Text(_pageTitle)),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Profil Düzenle')),
+      appBar: AppBar(title: Text(_pageTitle)),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -177,30 +193,28 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
             // Gender dropdown
             DropdownButtonFormField<String>(
-              value: _selectedGender,
+              initialValue: _selectedGender,
               decoration: const InputDecoration(
                 labelText: 'Cinsiyet',
                 prefixIcon: Icon(Icons.wc),
               ),
-              items: _options.genderOptions.map((g) => DropdownMenuItem(
-                value: g,
-                child: Text(g),
-              )).toList(),
+              items: _options.genderOptions
+                  .map((g) => DropdownMenuItem(value: g, child: Text(g)))
+                  .toList(),
               onChanged: (v) => setState(() => _selectedGender = v),
             ),
             const SizedBox(height: AppSpacing.md),
 
             // Blood type dropdown
             DropdownButtonFormField<String>(
-              value: _selectedBloodType,
+              initialValue: _selectedBloodType,
               decoration: const InputDecoration(
                 labelText: 'Kan Grubu',
                 prefixIcon: Icon(Icons.bloodtype),
               ),
-              items: _options.bloodTypes.map((bt) => DropdownMenuItem(
-                value: bt,
-                child: Text(bt),
-              )).toList(),
+              items: _options.bloodTypes
+                  .map((bt) => DropdownMenuItem(value: bt, child: Text(bt)))
+                  .toList(),
               onChanged: (v) => setState(() => _selectedBloodType = v),
             ),
             const SizedBox(height: AppSpacing.lg),
@@ -263,7 +277,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
             const SizedBox(height: AppSpacing.xl),
 
             PrimaryButton(
-              label: 'Kaydet',
+              label: widget.isInitialSetup ? 'Kaydet ve Devam Et' : 'Kaydet',
               icon: Icons.save,
               onPressed: _isSaving ? null : _save,
               isLoading: _isSaving,
@@ -287,11 +301,10 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
             CircleAvatar(
               radius: 30,
               backgroundColor: theme.colorScheme.primaryContainer,
-              child: Text(
-                user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-                style: AppTypography.headlineMedium(context).copyWith(
-                  color: theme.colorScheme.onPrimaryContainer,
-                ),
+              child: Icon(
+                Icons.person_outline,
+                color: theme.colorScheme.onPrimaryContainer,
+                size: 32,
               ),
             ),
             const SizedBox(width: AppSpacing.md),
@@ -302,9 +315,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                   Text(user.fullName, style: AppTypography.titleLarge(context)),
                   Text(
                     user.email,
-                    style: AppTypography.bodyMedium(context).copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                    style: AppTypography.bodyMedium(
+                      context,
+                    ).copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -315,7 +328,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     );
   }
 
-  Widget _buildChipSection(String title, List<String> options, List<String> selected) {
+  Widget _buildChipSection(
+    String title,
+    List<String> options,
+    List<String> selected,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
