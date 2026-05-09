@@ -69,7 +69,7 @@ dependencies:
   screen_brightness: ^0.2.1+1
   android_id: ^0.5.1
   flutter_foreground_task: ^9.2.2
-  flutter_local_notifications: ^21.0.0
+  flutter_local_notifications: ^18.0.0
 
 dev_dependencies:
   flutter_test:
@@ -94,6 +94,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/images/logo.png
     - assets/fixtures/earthquake/TK_3139__3c_25hz.csv
     - assets/fixtures/earthquake/TK_4615__3c_25hz.csv
     - assets/fixtures/earthquake/TK_0118__3c_25hz.csv

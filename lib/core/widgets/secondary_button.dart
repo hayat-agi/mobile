@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
-/// Secondary action button
+/// Secondary action button — Warning Orange background, white text, 32px radius.
 class SecondaryButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
@@ -20,18 +21,39 @@ class SecondaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final button = OutlinedButton(
+    return ElevatedButton(
       onPressed: isLoading ? null : onPressed,
-      style: OutlinedButton.styleFrom(
+      style: ElevatedButton.styleFrom(
+        elevation: 0,
+        backgroundColor: AppColors.secondary,
+        foregroundColor: AppColors.onSecondary,
+        disabledBackgroundColor: AppColors.sterlingGray,
+        disabledForegroundColor: AppColors.textTertiaryLight,
         minimumSize: isFullWidth
-            ? const Size(double.infinity, 48)
-            : const Size(0, 48),
+            ? const Size(double.infinity, 52)
+            : const Size(0, 52),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.md,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusButton),
+        ),
+        textStyle: const TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.064,
+        ),
       ),
       child: isLoading
           ? const SizedBox(
               height: 20,
               width: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
             )
           : Row(
               mainAxisSize: isFullWidth ? MainAxisSize.max : MainAxisSize.min,
@@ -45,8 +67,5 @@ class SecondaryButton extends StatelessWidget {
               ],
             ),
     );
-
-    return button;
   }
 }
-

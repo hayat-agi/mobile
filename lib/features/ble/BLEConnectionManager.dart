@@ -176,7 +176,7 @@ class BleConnection extends GetxController {
       // Step 1: Make sure Bluetooth is turned on
       final adapterState = await FlutterBluePlus.adapterState.first;
       if (adapterState != BluetoothAdapterState.on) {
-        status.value = 'Bluetooth is off — please enable it';
+        status.value = 'Bluetooth kapalı — lütfen açın';
         return;
       }
 

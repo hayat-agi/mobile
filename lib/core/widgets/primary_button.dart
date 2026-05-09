@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 
-/// Primary action button
+/// Primary action button — Action Blue background, white text, 32px radius.
 class PrimaryButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
@@ -24,15 +25,30 @@ class PrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final button = ElevatedButton(
+    return ElevatedButton(
       onPressed: isLoading ? null : onPressed,
       style: ElevatedButton.styleFrom(
-        backgroundColor: backgroundColor ?? theme.colorScheme.primary,
-        foregroundColor: foregroundColor ?? theme.colorScheme.onPrimary,
+        elevation: 0,
+        backgroundColor: backgroundColor ?? AppColors.primary,
+        foregroundColor: foregroundColor ?? AppColors.onPrimary,
+        disabledBackgroundColor: AppColors.sterlingGray,
+        disabledForegroundColor: AppColors.textTertiaryLight,
         minimumSize: isFullWidth
-            ? const Size(double.infinity, 48)
-            : const Size(0, 48),
+            ? const Size(double.infinity, 52)
+            : const Size(0, 52),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.md,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusButton),
+        ),
+        textStyle: const TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.064,
+        ),
       ),
       child: isLoading
           ? const SizedBox(
@@ -55,8 +71,5 @@ class PrimaryButton extends StatelessWidget {
               ],
             ),
     );
-
-    return button;
   }
 }
-

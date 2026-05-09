@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
 import 'modern_card.dart';
 
-/// Stat card for displaying metrics
+/// Stat card for displaying metrics — Ghost Fog background, 16px radius.
 class StatCard extends StatelessWidget {
   final String label;
   final String value;
@@ -25,19 +26,20 @@ class StatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final iconColor = this.iconColor ?? theme.colorScheme.primary;
+    final resolvedIconColor = iconColor ?? AppColors.primary;
 
     return ModernCard(
       onTap: onTap,
       color: backgroundColor,
       padding: const EdgeInsets.all(AppSpacing.md),
+      showBorder: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(icon, color: iconColor, size: 20),
+              Icon(icon, color: resolvedIconColor, size: 20),
               if (onTap != null)
                 Icon(
                   Icons.chevron_right,
@@ -65,4 +67,3 @@ class StatCard extends StatelessWidget {
     );
   }
 }
-

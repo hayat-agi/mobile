@@ -585,7 +585,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                       children: [
                       // BLE Scan Option
                       SecondaryButton(
-                        label: _showBleScan ? 'BLE Taramayı Durdur' : 'BLE Cihaz Tara',
+                        label: _showBleScan ? 'Aramayı Durdur' : 'Hayat Ağı Cihazı Ara',
                         icon: _showBleScan ? Icons.stop : Icons.bluetooth_searching,
                         onPressed: _showBleScan ? () {
                           setState(() {
@@ -608,7 +608,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                           
                           // Show scanning indicator at top if scanning, but still show results
                           return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               // Scanning indicator
                               if (isScanning)
@@ -636,7 +636,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                                             crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                'BLE cihazları aranıyor...',
+                                                'Hayat Ağı Cihazı aranıyor...',
                                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                                   fontWeight: FontWeight.bold,
                                                 ),
@@ -664,7 +664,9 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                                 Padding(
                                   padding: const EdgeInsets.all(AppSpacing.md),
                                   child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.center,
                                     children: [
+                                      const SizedBox(height: AppSpacing.lg),
                                       Icon(
                                         Icons.bluetooth_disabled,
                                         size: 48,
@@ -679,7 +681,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                                       ),
                                       const SizedBox(height: AppSpacing.xs),
                                       Text(
-                                        'ESP32 cihazınızın açık ve yayın yaptığından emin olun',
+                                        'Hayat Ağı cihazınızın açık ve yayın yaptığından emin olun',
                                         textAlign: TextAlign.center,
                                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                           color: AppColors.textSecondaryLight,
@@ -789,7 +791,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
                         controller: _gatewayIdController,
                         decoration: const InputDecoration(
                           labelText: 'Cihaz ID *',
-                          hintText: 'Cihaz ID\'sini girin veya BLE\'dan seçin',
+                          hintText: 'Cihaz ID\'sini girin veya taramadan seçin',
                           prefixIcon: Icon(Icons.qr_code_scanner),
                         ),
                         textInputAction: TextInputAction.next,

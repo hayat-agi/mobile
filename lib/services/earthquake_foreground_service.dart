@@ -74,7 +74,7 @@ class EarthquakeForegroundService {
     const fln.InitializationSettings initSettings =
         fln.InitializationSettings(android: androidInit);
 
-    await _localNotifications.initialize(settings: initSettings);
+    await _localNotifications.initialize(initSettings);
 
     // Create the high-importance alert channel up front.
     final androidPlugin = _localNotifications
@@ -197,10 +197,10 @@ class EarthquakeForegroundService {
         fln.NotificationDetails(android: androidDetails);
 
     await _localNotifications.show(
-      id: _earthquakeAlertNotificationId,
-      title: 'DEPREM UYARISI',
-      body: body,
-      notificationDetails: details,
+      _earthquakeAlertNotificationId,
+      'DEPREM UYARISI',
+      body,
+      details,
     );
 
     debugPrint(

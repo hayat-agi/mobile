@@ -195,6 +195,9 @@ class EarthquakeDetectionService {
 
     // Reset pipeline state for a clean start
     _staLta.reset();
+    // Prime LTA with a quiet baseline so detection works immediately on connect
+    // instead of requiring 30 s of organic data to fill the LTA window.
+    _staLta.primeWithQuietBaseline(EarthquakeConfig.externalSensorBaselineMs2);
     _stationarity.reset();
     _featureBuffer.clear();
     _resetTriggerWindow();
@@ -340,7 +343,7 @@ class EarthquakeDetectionService {
     // ── Pre-filter check: gyroscope veto ───────────────────────────────────
     // Earthquakes = translational only. Human handling = rotational.
     // Skip this check during replay (no gyro data in CSV).
-    if (!isReplaying.value && !_usingExternalStream &&
+    if (!isReplaying.value &&
         _gyroAboveCount >= (EarthquakeConfig.gyroscopeWindowSamples * 0.20).ceil()) {
       if (monitorState.value == EarthquakeMonitorState.suspicious) {
         monitorState.value = EarthquakeMonitorState.monitoring;
