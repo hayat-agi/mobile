@@ -19,7 +19,7 @@ import '../../user_profile/services/vulnerable_group_service.dart';
 /// Outgoing BLE frames use v4: health profile + message + optional hane profili JSON.
 class DisasterController extends GetxController {
   DisasterController({BleService? bleService})
-      : _bleService = bleService ?? BleService();
+    : _bleService = bleService ?? BleService();
 
   final BleService _bleService;
 
@@ -50,13 +50,15 @@ class DisasterController extends GetxController {
   // ─── Send ──────────────────────────────────────────────────────────
 
   /// Send a free-text message via BLE with the user's health profile attached.
-  /// Returns true if sent or successfully queued.
-  /// Returns false only if no gateway has ever been added.
-  Future<bool> sendManualMessage(String text) async {
-    if (text.trim().isEmpty) return false;
+  /// The BLE send/queue and backend sync are reported separately so the UI can
+  /// delay PFA support until the web command center has received the event.
+  Future<DisasterSendResult> sendManualMessage(String text) async {
+    if (text.trim().isEmpty) return DisasterSendResult.failed();
 
     final savedGateways = GatewayService().gateways.value;
-    if (savedGateways.isEmpty && !isConnected) return false;
+    if (savedGateways.isEmpty && !isConnected) {
+      return DisasterSendResult.failed();
+    }
 
     if (savedGateways.isNotEmpty) {
       _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
@@ -66,8 +68,9 @@ class DisasterController extends GetxController {
     try {
       HouseholdProfile? household;
       if (savedGateways.isNotEmpty) {
-        household =
-            GatewayService().getHouseholdProfile(savedGateways.first.id);
+        household = GatewayService().getHouseholdProfile(
+          savedGateways.first.id,
+        );
       }
 
       final packet = DisasterMessagePacket(
@@ -78,17 +81,22 @@ class DisasterController extends GetxController {
       await _bleService.sendBinaryQueued(packet.encode());
       lastSendSuccess.value = true;
 
-      final gatewayId =
-          savedGateways.isNotEmpty ? savedGateways.first.id : null;
+      var syncedToBackend = false;
+      final gatewayId = savedGateways.isNotEmpty
+          ? savedGateways.first.id
+          : null;
       if (gatewayId != null) {
-        final phoneId = await DevicePasswordService().getOrCreateStableDeviceId();
+        final phoneId = await DevicePasswordService()
+            .getOrCreateStableDeviceId();
         final gateway = GatewayService().getGateway(gatewayId);
         final payload = {
           'type': 'manual_message',
           'message': text.trim(),
           'sentAt': DateTime.now().toIso8601String(),
           'phoneDeviceId': phoneId,
-          'healthProfile': _healthProfile.hasProfile ? _healthProfile.toJson() : null,
+          'healthProfile': _healthProfile.hasProfile
+              ? _healthProfile.toJson()
+              : null,
           'household': household?.toJson(),
           'gateway': {
             'id': gatewayId,
@@ -99,28 +107,47 @@ class DisasterController extends GetxController {
             'batteryLevel': gateway?.batteryLevel,
           },
         };
-        () async {
-          for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-              await DisasterRepository().reportDisasterEvent(gatewayId, payload);
-              return;
-            } catch (e) {
-              if (attempt == 2) {
-                debugPrint('DisasterController: backend sync failed — $e');
-              } else {
-                await Future.delayed(const Duration(seconds: 2));
-              }
+        for (int attempt = 0; attempt < 3; attempt++) {
+          try {
+            await DisasterRepository().reportDisasterEvent(gatewayId, payload);
+            syncedToBackend = true;
+            break;
+          } catch (e) {
+            if (attempt == 2) {
+              debugPrint('DisasterController: backend sync failed — $e');
+            } else {
+              await Future.delayed(const Duration(seconds: 2));
             }
           }
-        }();
+        }
       }
 
-      return true;
+      return DisasterSendResult(
+        sentOrQueued: true,
+        syncedToBackend: syncedToBackend,
+      );
     } catch (_) {
       lastSendSuccess.value = false;
-      return false;
+      return DisasterSendResult.failed();
     } finally {
       isSending.value = false;
     }
   }
+}
+
+class DisasterSendResult {
+  const DisasterSendResult({
+    required this.sentOrQueued,
+    required this.syncedToBackend,
+  });
+
+  factory DisasterSendResult.failed() {
+    return const DisasterSendResult(
+      sentOrQueued: false,
+      syncedToBackend: false,
+    );
+  }
+
+  final bool sentOrQueued;
+  final bool syncedToBackend;
 }
