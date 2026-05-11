@@ -338,14 +338,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     const autoMessage =
         'Otomatik acil durum bildirimi — kullanıcı 5 dakikadır yanıt vermiyor';
 
-    final success = await _ctrl.sendManualMessage(autoMessage);
+    final result = await _ctrl.sendManualMessage(autoMessage);
 
     if (!mounted) return;
-    if (success) {
+    if (result.sentOrQueued) {
       _showSendStatus(
-        _ctrl.isConnected
-            ? 'Mesaj iletildi ✓'
-            : 'Mesaj kuyruğa alındı',
+        _ctrl.isConnected ? 'Mesaj iletildi ✓' : 'Mesaj kuyruğa alındı',
         _ctrl.isConnected ? Colors.green : Colors.orange,
       );
     } else {
@@ -386,8 +384,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   void _onUserMessageSent(String text) {
     PFAMessageService().cancelNoResponseTimer();
-    final category =
-        PFAMessageService().detectCategoryWithRisk(text, riskScore: 0);
+    final category = PFAMessageService().detectCategoryWithRisk(
+      text,
+      riskScore: 0,
+    );
     final msg = PFAMessageService().selectMessage(
       category,
       isVulnerable: _isVulnerableProfile,
@@ -409,9 +409,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
     _isSending = true;
     setState(() {});
-    bool success = false;
+    DisasterSendResult result = DisasterSendResult.failed();
     try {
-      success = await _ctrl.sendManualMessage(text);
+      result = await _ctrl.sendManualMessage(text);
     } finally {
       _isSending = false;
       if (mounted) setState(() {});
@@ -419,15 +419,20 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
     if (!mounted) return;
 
-    if (success) {
+    if (result.sentOrQueued) {
       _manualTextController.clear();
-      _onUserMessageSent(text);
+      if (result.syncedToBackend) {
+        _onUserMessageSent(text);
+      }
       if (_ctrl.isConnected) {
         _disarmAutoSend();
       }
+      final statusMessage = result.syncedToBackend
+          ? 'Mesaj web arayüzüne iletildi ✓'
+          : 'Mesaj web arayüzüne ulaşmadı';
       _showSendStatus(
-        _ctrl.isConnected ? 'Mesaj iletildi ✓' : 'Mesaj kuyruğa alındı',
-        _ctrl.isConnected ? Colors.green : Colors.orange,
+        statusMessage,
+        result.syncedToBackend ? Colors.green : Colors.orange,
       );
     } else {
       _showSendStatus('Mesaj gönderilemedi', Colors.red);
@@ -498,10 +503,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
         icon: const Icon(Icons.arrow_back, color: Colors.white),
         onPressed: () => Navigator.pop(context),
       ),
-      title: const Text(
-        'Afet Modu',
-        style: TextStyle(color: Colors.white),
-      ),
+      title: const Text('Afet Modu', style: TextStyle(color: Colors.white)),
       actions: [
         Obx(() {
           final connected = _ctrl.isConnected;
@@ -515,14 +517,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                   height: 10,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color:
-                        connected ? AppColors.success : AppColors.danger,
+                    color: connected ? AppColors.success : AppColors.danger,
                     boxShadow: [
                       BoxShadow(
-                        color: (connected
-                                ? AppColors.success
-                                : AppColors.danger)
-                            .withValues(alpha: 0.5),
+                        color:
+                            (connected ? AppColors.success : AppColors.danger)
+                                .withValues(alpha: 0.5),
                         blurRadius: 6,
                         spreadRadius: 1,
                       ),
@@ -533,9 +533,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                 Text(
                   connected ? 'Bağlı' : 'Bağlantı Yok',
                   style: TextStyle(
-                    color: connected
-                        ? AppColors.success
-                        : Colors.white54,
+                    color: connected ? AppColors.success : Colors.white54,
                     fontSize: 12,
                   ),
                 ),
@@ -602,8 +600,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
   static const _messageInputFillColor = Color(0xFFF1F5F9);
 
   Widget _buildMessageInput() {
-    final borderColor =
-        _isListening ? Colors.red.shade400 : Colors.grey.shade600;
+    final borderColor = _isListening
+        ? Colors.red.shade400
+        : Colors.grey.shade600;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -632,8 +631,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
           decoration: BoxDecoration(
             color: Colors.grey.shade900,
             borderRadius: BorderRadius.circular(16),
-            border:
-                Border.all(color: borderColor, width: _isListening ? 1.5 : 1),
+            border: Border.all(
+              color: borderColor,
+              width: _isListening ? 1.5 : 1,
+            ),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -664,8 +665,7 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                       isDense: false,
                       filled: true,
                       fillColor: _messageInputFillColor,
-                      hintText:
-                          _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
+                      hintText: _isListening ? 'Dinleniyor...' : 'Mesaj yaz...',
                       hintStyle: TextStyle(
                         color: _isListening
                             ? Colors.red.shade700
@@ -731,8 +731,9 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
                   height: 48,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: AppColors.success
-                        .withValues(alpha: _isSending ? 0.10 : 0.25),
+                    color: AppColors.success.withValues(
+                      alpha: _isSending ? 0.10 : 0.25,
+                    ),
                   ),
                   child: _isSending
                       ? const Padding(
@@ -765,10 +766,7 @@ class _SosPulseButton extends StatefulWidget {
   final bool isActive;
   final VoidCallback onTap;
 
-  const _SosPulseButton({
-    required this.isActive,
-    required this.onTap,
-  });
+  const _SosPulseButton({required this.isActive, required this.onTap});
 
   @override
   State<_SosPulseButton> createState() => _SosPulseButtonState();
@@ -787,12 +785,14 @@ class _SosPulseButtonState extends State<_SosPulseButton>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     );
-    _scale = Tween<double>(begin: 1.0, end: 1.06).animate(
-      CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-    );
-    _glow = Tween<double>(begin: 18.0, end: 42.0).animate(
-      CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-    );
+    _scale = Tween<double>(
+      begin: 1.0,
+      end: 1.06,
+    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _glow = Tween<double>(
+      begin: 18.0,
+      end: 42.0,
+    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
 
     if (widget.isActive) {
       _pulse.repeat(reverse: true);
@@ -806,9 +806,11 @@ class _SosPulseButtonState extends State<_SosPulseButton>
       _pulse.repeat(reverse: true);
     } else if (!widget.isActive && old.isActive) {
       _pulse.stop();
-      _pulse.animateTo(0.0,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut);
+      _pulse.animateTo(
+        0.0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
     }
   }
 
@@ -855,9 +857,7 @@ class _SosPulseButtonState extends State<_SosPulseButton>
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        widget.isActive
-                            ? Icons.sensors
-                            : Icons.sos,
+                        widget.isActive ? Icons.sensors : Icons.sos,
                         size: 52,
                         color: Colors.white,
                       ),
