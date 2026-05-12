@@ -455,15 +455,14 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
           // No placemarks returned for these coordinates. Clear the
           // hierarchical address fields so a previously-typed address can't
           // travel with the new lat/lng and create a mismatch.
-          setState(() {
-            _streetController.clear();
-            _neighborhoodController.clear();
-            _districtController.clear();
-            _cityController.clear();
-            _postalCodeController.clear();
-          });
-
           if (mounted) {
+            setState(() {
+              _streetController.clear();
+              _neighborhoodController.clear();
+              _districtController.clear();
+              _cityController.clear();
+              _postalCodeController.clear();
+            });
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
