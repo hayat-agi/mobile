@@ -2,6 +2,7 @@ class BackendGateway {
   final String id;
   final String? name;
   final String? macAddress;
+  final String? serialNumber;
   final String? status;
   final List<BackendCitizen> citizens;
   final List<BackendPet> pets;
@@ -11,6 +12,7 @@ class BackendGateway {
     required this.id,
     this.name,
     this.macAddress,
+    this.serialNumber,
     this.status,
     this.citizens = const [],
     this.pets = const [],
@@ -22,13 +24,21 @@ class BackendGateway {
       id: json['_id'] as String? ?? json['id'] as String? ?? '',
       name: json['name'] as String?,
       macAddress: json['macAddress'] as String?,
+      serialNumber:
+          json['serialNumber'] as String? ?? json['serial_number'] as String?,
       status: json['status'] as String?,
-      citizens: (json['registered_users'] as List<dynamic>? ?? json['citizens'] as List<dynamic>?)
+      citizens:
+          (json['registered_users'] as List<dynamic>? ??
+                  json['citizens'] as List<dynamic>?)
               ?.map((e) => BackendCitizen.fromJson(e as Map<String, dynamic>))
-              .toList() ?? [],
-      pets: (json['registered_animals'] as List<dynamic>? ?? json['pets'] as List<dynamic>?)
+              .toList() ??
+          [],
+      pets:
+          (json['registered_animals'] as List<dynamic>? ??
+                  json['pets'] as List<dynamic>?)
               ?.map((e) => BackendPet.fromJson(e as Map<String, dynamic>))
-              .toList() ?? [],
+              .toList() ??
+          [],
       address: json['address'] as Map<String, dynamic>?,
     );
   }
@@ -65,12 +75,21 @@ class BackendCitizen {
       birthDate: json['birthDate'] as String?,
       gender: json['gender'] as String?,
       bloodType: json['bloodType'] as String?,
-      medicalConditions: (json['medicalConditions'] as List<dynamic>?)
-              ?.map((e) => e as String).toList() ?? [],
-      medications: (json['medications'] as List<dynamic>?)
-              ?.map((e) => e as String).toList() ?? [],
-      prosthetics: (json['prosthetics'] as List<dynamic>?)
-              ?.map((e) => e as String).toList() ?? [],
+      medicalConditions:
+          (json['medicalConditions'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      medications:
+          (json['medications'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
+      prosthetics:
+          (json['prosthetics'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          [],
     );
   }
 

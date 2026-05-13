@@ -174,22 +174,24 @@ class GatewayService {
     double? latitude,
     double? longitude,
   }) async {
+    final normalizedGatewayId = gatewayId.trim();
+
     // Validate ID format
-    if (gatewayId.trim().isEmpty) {
+    if (normalizedGatewayId.isEmpty) {
       return false;
     }
 
     // Check if gateway already exists
-    if (gateways.value.any((g) => g.id == gatewayId.trim())) {
+    if (gateways.value.any((g) => g.id == normalizedGatewayId)) {
       return false;
     }
 
     // Create new gateway with address
     final gateway = Gateway(
-      id: gatewayId.trim(),
+      id: normalizedGatewayId,
       name:
           name ??
-          'Cihaz ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}',
+          'Cihaz ${normalizedGatewayId.substring(0, normalizedGatewayId.length > 4 ? 4 : normalizedGatewayId.length)}',
       status: GatewayStatus.disconnected,
       batteryLevel: 100,
       lastSeen: DateTime.now(),
@@ -213,37 +215,33 @@ class GatewayService {
       longitude: longitude,
     );
 
-    // Add to list and persist
+    try {
+      await GatewayRepository().createGateway({
+        // Backend requires unique serialNumber. Use the BLE MAC as the canonical
+        // device serial — same value the backend's disaster-events lookup falls
+        // back to when :id isn't a Mongo ObjectId.
+        'serialNumber': gateway.id,
+        'name': gateway.name,
+        if (gateway.buildingType != null)
+          'buildingType': gateway.buildingType!.name,
+        if (gateway.street != null) 'street': gateway.street,
+        if (gateway.buildingNumber != null)
+          'buildingNumber': gateway.buildingNumber,
+        if (gateway.doorNumber != null) 'doorNumber': gateway.doorNumber,
+        if (gateway.neighborhood != null) 'neighborhood': gateway.neighborhood,
+        if (gateway.district != null) 'district': gateway.district,
+        if (gateway.city != null) 'city': gateway.city,
+        if (gateway.postalCode != null) 'postalCode': gateway.postalCode,
+        if (gateway.latitude != null) 'latitude': gateway.latitude,
+        if (gateway.longitude != null) 'longitude': gateway.longitude,
+      });
+    } catch (e) {
+      debugPrint('GatewayService: backend gateway create failed — $e');
+      return false;
+    }
+
     gateways.value = [...gateways.value, gateway];
     await _saveGateways();
-
-    unawaited(
-      GatewayRepository()
-          .createGateway({
-            // Backend requires unique serialNumber. Use the BLE MAC as the canonical
-            // device serial — same value the backend's disaster-events lookup falls
-            // back to when :id isn't a Mongo ObjectId.
-            'serialNumber': gateway.id,
-            'name': gateway.name,
-            if (gateway.buildingType != null)
-              'buildingType': gateway.buildingType!.name,
-            if (gateway.street != null) 'street': gateway.street,
-            if (gateway.buildingNumber != null)
-              'buildingNumber': gateway.buildingNumber,
-            if (gateway.doorNumber != null) 'doorNumber': gateway.doorNumber,
-            if (gateway.neighborhood != null)
-              'neighborhood': gateway.neighborhood,
-            if (gateway.district != null) 'district': gateway.district,
-            if (gateway.city != null) 'city': gateway.city,
-            if (gateway.postalCode != null) 'postalCode': gateway.postalCode,
-            if (gateway.latitude != null) 'latitude': gateway.latitude,
-            if (gateway.longitude != null) 'longitude': gateway.longitude,
-          })
-          .then<void>((_) {})
-          .catchError((Object e) {
-            debugPrint('GatewayService: backend gateway create failed — $e');
-          }),
-    );
 
     return true;
   }
@@ -276,16 +274,37 @@ class GatewayService {
   /// Replace the gateway's stored ID with the real BLE remoteId.
   /// Useful when the user manually typed an ID during add and it doesn't
   /// match the actual BLE address.
-  void updateGatewayBleId(String oldId, String newId) {
-    if (oldId == newId) return;
+  Future<bool> updateGatewayBleId(String oldId, String newId) async {
+    if (oldId == newId) return true;
     final index = gateways.value.indexWhere((g) => g.id == oldId);
     if (index != -1) {
+      if (gateways.value.any((g) => g.id == newId)) {
+        debugPrint(
+          'GatewayService: cannot update BLE ID — $newId already exists',
+        );
+        return false;
+      }
+
+      try {
+        await GatewayRepository().updateGatewaySerialNumber(oldId, newId);
+      } catch (e) {
+        debugPrint('GatewayService: backend gateway serial update failed — $e');
+        return false;
+      }
+
       final updated = gateways.value[index].copyWith(id: newId);
       final newList = List<Gateway>.from(gateways.value);
       newList[index] = updated;
       gateways.value = newList;
-      _saveGateways();
+      final householdProfile = _householdProfiles.remove(oldId);
+      if (householdProfile != null) {
+        _householdProfiles[newId] = householdProfile.copyWith(gatewayId: newId);
+        await _saveHouseholdProfiles();
+      }
+      await _saveGateways();
+      return true;
     }
+    return false;
   }
 
   // Update gateway battery level
@@ -396,13 +415,13 @@ class GatewayService {
       }
 
       final actualId = _bleService.connectedDeviceId;
+      var effectiveId = gatewayId;
       if (actualId != null && actualId != gatewayId) {
-        updateGatewayBleId(gatewayId, actualId);
+        final idUpdated = await updateGatewayBleId(gatewayId, actualId);
+        if (idUpdated) {
+          effectiveId = actualId;
+        }
       }
-
-      final effectiveId = (actualId != null && actualId != gatewayId)
-          ? actualId
-          : gatewayId;
 
       // Step 2: Update gateway status
       final index = gateways.value.indexWhere((g) => g.id == effectiveId);
