@@ -398,51 +398,45 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
               'adminArea=${place.administrativeArea}, '
               'postalCode=${place.postalCode}');
 
+          // Hierarchical address fields are overwritten from the placemark
+          // (street/neighborhood/district/city/postalCode) so coordinates and
+          // address always describe the same place. Door/building number are
+          // preserved because Turkish reverse geocoding rarely returns them
+          // reliably and they're typically entered by hand.
+          //
+          // Previous behaviour only filled empty fields, which produced
+          // gateways whose stored lat/lng pointed at the user's current GPS
+          // location (e.g. Pursaklar) while the address still read whatever
+          // the user had typed earlier (e.g. Etimesgut). The mismatch showed
+          // up as map markers in one district and gateway listings in another.
           setState(() {
-            // Sokak/Cadde: Türkiye'de place.street genellikle mahalle adını döner.
-            // place.thoroughfare gerçek cadde/sokak adını içerir.
-            if (_streetController.text.isEmpty) {
-              final street = place.thoroughfare ?? place.street;
-              if (street != null && street.isNotEmpty) {
-                _streetController.text = street;
-              }
-            }
-            // Bina No: subThoroughfare = kapı/bina numarası
-            if (_buildingNumberController.text.isEmpty) {
-              final buildingNo = place.subThoroughfare;
-              if (buildingNo != null && buildingNo.isNotEmpty) {
-                _buildingNumberController.text = buildingNo;
-              }
-            }
-            // Mahalle: subLocality = mahalle
-            if (_neighborhoodController.text.isEmpty) {
-              final neighborhood = place.subLocality;
-              if (neighborhood != null && neighborhood.isNotEmpty) {
-                _neighborhoodController.text = neighborhood;
-              }
-            }
-            // İlçe: subAdministrativeArea = ilçe (Türkiye'de doğru alan)
-            // locality = ilçe için fallback
-            if (_districtController.text.isEmpty) {
-              final district = place.subAdministrativeArea?.isNotEmpty == true
-                  ? place.subAdministrativeArea
-                  : place.locality;
-              if (district != null && district.isNotEmpty) {
-                _districtController.text = district;
-              }
-            }
-            // İl: administrativeArea = il (Türkiye'de doğru alan)
-            if (_cityController.text.isEmpty) {
-              final city = place.administrativeArea;
-              if (city != null && city.isNotEmpty) {
-                _cityController.text = city;
-              }
-            }
-            // Posta kodu
-            if (_postalCodeController.text.isEmpty) {
-              if (place.postalCode != null && place.postalCode!.isNotEmpty) {
-                _postalCodeController.text = place.postalCode!;
-              }
+            final street = place.thoroughfare ?? place.street;
+            _streetController.text = (street != null && street.isNotEmpty) ? street : '';
+
+            final neighborhood = place.subLocality;
+            _neighborhoodController.text =
+                (neighborhood != null && neighborhood.isNotEmpty) ? neighborhood : '';
+
+            final district = place.subAdministrativeArea?.isNotEmpty == true
+                ? place.subAdministrativeArea
+                : place.locality;
+            _districtController.text =
+                (district != null && district.isNotEmpty) ? district : '';
+
+            final city = place.administrativeArea;
+            _cityController.text = (city != null && city.isNotEmpty) ? city : '';
+
+            final postal = place.postalCode;
+            _postalCodeController.text = (postal != null && postal.isNotEmpty) ? postal : '';
+
+            // Bina No: subThoroughfare = kapı/bina numarası. Only auto-fill if
+            // we got a value AND the field is empty — placemarks return this
+            // sporadically, so we don't want to clobber a manual entry with
+            // nothing.
+            final buildingNo = place.subThoroughfare;
+            if (buildingNo != null && buildingNo.isNotEmpty &&
+                _buildingNumberController.text.isEmpty) {
+              _buildingNumberController.text = buildingNo;
             }
           });
 
@@ -451,20 +445,29 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Text('📍 Konum alındı — adres alanları dolduruldu'),
+                content: const Text('📍 Konum alındı — adres alanları GPS\'e göre güncellendi'),
                 backgroundColor: AppColors.success,
                 duration: const Duration(seconds: 2),
               ),
             );
           }
         } else {
-          // No placemarks found
+          // No placemarks returned for these coordinates. Clear the
+          // hierarchical address fields so a previously-typed address can't
+          // travel with the new lat/lng and create a mismatch.
           if (mounted) {
+            setState(() {
+              _streetController.clear();
+              _neighborhoodController.clear();
+              _districtController.clear();
+              _cityController.clear();
+              _postalCodeController.clear();
+            });
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text('📍 Koordinatlar alındı (${position.latitude.toStringAsFixed(4)}, '
-                    '${position.longitude.toStringAsFixed(4)}) — adres çevrilemedi'),
+                    '${position.longitude.toStringAsFixed(4)}) — adres çevrilemedi, lütfen elle girin'),
                 backgroundColor: AppColors.warning,
                 duration: const Duration(seconds: 3),
               ),
@@ -473,11 +476,21 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
         }
       } catch (e) {
         debugPrint('[Location] Reverse geocoding failed: $e');
+        // Geocoding threw before we could verify the address. Coordinates
+        // already updated above, so clear the hierarchical address fields
+        // to avoid silently shipping stale text alongside fresh lat/lng.
         if (mounted) {
+          setState(() {
+            _streetController.clear();
+            _neighborhoodController.clear();
+            _districtController.clear();
+            _cityController.clear();
+            _postalCodeController.clear();
+          });
           ScaffoldMessenger.of(context).hideCurrentSnackBar();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('📍 GPS alındı ama adres çevrilemedi: $e'),
+              content: Text('📍 GPS alındı ama adres çevrilemedi, lütfen elle girin: $e'),
               backgroundColor: AppColors.warning,
               duration: const Duration(seconds: 3),
             ),
