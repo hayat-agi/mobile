@@ -193,13 +193,15 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
             // Gender dropdown
             DropdownButtonFormField<String>(
-              initialValue: _selectedGender,
+              initialValue: _options.genderLabels.containsKey(_selectedGender)
+                  ? _selectedGender
+                  : null,
               decoration: const InputDecoration(
                 labelText: 'Cinsiyet',
                 prefixIcon: Icon(Icons.wc),
               ),
-              items: _options.genderOptions
-                  .map((g) => DropdownMenuItem(value: g, child: Text(g)))
+              items: _options.genderLabels.entries
+                  .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
                   .toList(),
               onChanged: (v) => setState(() => _selectedGender = v),
             ),
