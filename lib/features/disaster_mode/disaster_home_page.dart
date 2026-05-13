@@ -328,7 +328,10 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
 
   /// Fires once after 5 minutes of complete inactivity.
   Future<void> _onInactivityTimeout() async {
-    if (_isSending) return;
+    if (_isSending) {
+      _resetInactivityTimer();
+      return;
+    }
 
     // Disarm first — guarantees exactly-once delivery even if this is called
     // concurrently (e.g. dispose race).
@@ -420,12 +423,12 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
     if (!mounted) return;
 
     if (result.sentOrQueued) {
+      // Any accepted user message proves the user responded. Disarm before
+      // clearing the text field, because its listener can reset the timer.
+      _disarmAutoSend();
       _manualTextController.clear();
       if (result.syncedToBackend) {
         _onUserMessageSent(text);
-      }
-      if (_ctrl.isConnected) {
-        _disarmAutoSend();
       }
       final statusMessage = result.syncedToBackend
           ? 'Mesaj web arayüzüne iletildi ✓'
