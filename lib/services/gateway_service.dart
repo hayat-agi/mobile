@@ -16,11 +16,15 @@ class GatewayService {
   factory GatewayService() => _instance;
   GatewayService._internal();
 
-  final ValueNotifier<List<Gateway>> gateways = ValueNotifier<List<Gateway>>([]);
+  final ValueNotifier<List<Gateway>> gateways = ValueNotifier<List<Gateway>>(
+    [],
+  );
 
   /// Set to a gateway ID when a periodic location check is due after connect.
   /// DashboardPage listens to this and performs the GPS comparison + prompt.
-  final ValueNotifier<String?> locationCheckNeeded = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> locationCheckNeeded = ValueNotifier<String?>(
+    null,
+  );
 
   final Map<String, HouseholdProfile> _householdProfiles = {};
   final BleService _bleService = BleService();
@@ -29,7 +33,8 @@ class GatewayService {
   static const int _locationCheckIntervalDays = 90;
 
   static const String _gatewaysStorageKey = 'persisted_gateways';
-  static const String _householdProfilesStorageKey = 'persisted_household_profiles';
+  static const String _householdProfilesStorageKey =
+      'persisted_household_profiles';
   bool _initialized = false;
 
   /// Syncs gateway statuses when the BLE connection drops unexpectedly.
@@ -98,7 +103,8 @@ class GatewayService {
             jsonDecode(profilesJson) as Map<String, dynamic>;
         for (final entry in jsonMap.entries) {
           final profile = HouseholdProfile.fromJson(
-              entry.value as Map<String, dynamic>);
+            entry.value as Map<String, dynamic>,
+          );
           _householdProfiles[profile.gatewayId] = profile;
         }
       }
@@ -118,7 +124,9 @@ class GatewayService {
     final scanGranted = await Permission.bluetoothScan.isGranted;
     final connectGranted = await Permission.bluetoothConnect.isGranted;
     if (!scanGranted || !connectGranted) {
-      debugPrint('GatewayService: skipping auto-reconnect — BLE permissions not granted');
+      debugPrint(
+        'GatewayService: skipping auto-reconnect — BLE permissions not granted',
+      );
       return;
     }
 
@@ -179,18 +187,28 @@ class GatewayService {
     // Create new gateway with address
     final gateway = Gateway(
       id: gatewayId.trim(),
-      name: name ?? 'Cihaz ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}',
+      name:
+          name ??
+          'Cihaz ${gatewayId.substring(0, gatewayId.length > 4 ? 4 : gatewayId.length)}',
       status: GatewayStatus.disconnected,
       batteryLevel: 100,
       lastSeen: DateTime.now(),
       buildingType: buildingType,
       street: street?.trim().isEmpty == true ? null : street?.trim(),
-      buildingNumber: buildingNumber?.trim().isEmpty == true ? null : buildingNumber?.trim(),
-      doorNumber: doorNumber?.trim().isEmpty == true ? null : doorNumber?.trim(),
-      neighborhood: neighborhood?.trim().isEmpty == true ? null : neighborhood?.trim(),
+      buildingNumber: buildingNumber?.trim().isEmpty == true
+          ? null
+          : buildingNumber?.trim(),
+      doorNumber: doorNumber?.trim().isEmpty == true
+          ? null
+          : doorNumber?.trim(),
+      neighborhood: neighborhood?.trim().isEmpty == true
+          ? null
+          : neighborhood?.trim(),
       district: district?.trim().isEmpty == true ? null : district?.trim(),
       city: city?.trim().isEmpty == true ? null : city?.trim(),
-      postalCode: postalCode?.trim().isEmpty == true ? null : postalCode?.trim(),
+      postalCode: postalCode?.trim().isEmpty == true
+          ? null
+          : postalCode?.trim(),
       latitude: latitude,
       longitude: longitude,
     );
@@ -199,25 +217,33 @@ class GatewayService {
     gateways.value = [...gateways.value, gateway];
     await _saveGateways();
 
-    GatewayRepository().createGateway({
-      // Backend requires unique serialNumber. Use the BLE MAC as the canonical
-      // device serial — same value the backend's disaster-events lookup falls
-      // back to when :id isn't a Mongo ObjectId.
-      'serialNumber': gateway.id,
-      'name': gateway.name,
-      if (gateway.buildingType != null) 'buildingType': gateway.buildingType!.name,
-      if (gateway.street != null) 'street': gateway.street,
-      if (gateway.buildingNumber != null) 'buildingNumber': gateway.buildingNumber,
-      if (gateway.doorNumber != null) 'doorNumber': gateway.doorNumber,
-      if (gateway.neighborhood != null) 'neighborhood': gateway.neighborhood,
-      if (gateway.district != null) 'district': gateway.district,
-      if (gateway.city != null) 'city': gateway.city,
-      if (gateway.postalCode != null) 'postalCode': gateway.postalCode,
-      if (gateway.latitude != null) 'latitude': gateway.latitude,
-      if (gateway.longitude != null) 'longitude': gateway.longitude,
-    }).catchError((Object e) {
-      debugPrint('GatewayService: backend gateway create failed — $e');
-    });
+    unawaited(
+      GatewayRepository()
+          .createGateway({
+            // Backend requires unique serialNumber. Use the BLE MAC as the canonical
+            // device serial — same value the backend's disaster-events lookup falls
+            // back to when :id isn't a Mongo ObjectId.
+            'serialNumber': gateway.id,
+            'name': gateway.name,
+            if (gateway.buildingType != null)
+              'buildingType': gateway.buildingType!.name,
+            if (gateway.street != null) 'street': gateway.street,
+            if (gateway.buildingNumber != null)
+              'buildingNumber': gateway.buildingNumber,
+            if (gateway.doorNumber != null) 'doorNumber': gateway.doorNumber,
+            if (gateway.neighborhood != null)
+              'neighborhood': gateway.neighborhood,
+            if (gateway.district != null) 'district': gateway.district,
+            if (gateway.city != null) 'city': gateway.city,
+            if (gateway.postalCode != null) 'postalCode': gateway.postalCode,
+            if (gateway.latitude != null) 'latitude': gateway.latitude,
+            if (gateway.longitude != null) 'longitude': gateway.longitude,
+          })
+          .then<void>((_) {})
+          .catchError((Object e) {
+            debugPrint('GatewayService: backend gateway create failed — $e');
+          }),
+    );
 
     return true;
   }
@@ -304,15 +330,66 @@ class GatewayService {
     }
   }
 
+  /// Registers this phone on the connected ESP32, then syncs the count reported
+  /// by that ESP32 to local state and backend. The ESP32 remains the source of
+  /// truth; failed registration never writes a guessed count.
+  Future<int?> registerCurrentPhoneAndSyncDeviceCount(String gatewayId) async {
+    if (!_bleService.isConnected.value || !_bleService.isAuthenticated.value) {
+      debugPrint('GatewayService: skip device count sync — BLE is not ready');
+      return null;
+    }
+
+    final stableId = await DevicePasswordService().getOrCreateStableDeviceId();
+    var registered = false;
+
+    for (var attempt = 0; attempt < 3 && !registered; attempt += 1) {
+      registered = await _bleService.registerDevice(stableId);
+      if (!registered) {
+        await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+      }
+    }
+
+    if (!registered) {
+      debugPrint(
+        'GatewayService: device registration failed — count not synced',
+      );
+      return null;
+    }
+
+    int? deviceCount;
+    for (var attempt = 0; attempt < 3 && deviceCount == null; attempt += 1) {
+      deviceCount = await _bleService.queryDeviceCount();
+      if (deviceCount == null) {
+        await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+      }
+    }
+
+    if (deviceCount == null) {
+      debugPrint(
+        'GatewayService: device count query failed after registration',
+      );
+      return null;
+    }
+
+    updateGatewayDeviceCount(gatewayId, deviceCount);
+    DisasterRepository()
+        .updateGatewayStats(gatewayId, deviceCount: deviceCount)
+        .catchError((Object e) {
+          debugPrint('GatewayService: backend device count sync failed — $e');
+        });
+
+    return deviceCount;
+  }
+
   // Connect to a gateway (via BLE)
   Future<void> connectToGateway(String gatewayId) async {
     updateGatewayStatus(gatewayId, GatewayStatus.connecting);
-    
+
     try {
       // Step 1: Use the new REQ-GW-05 fast auto-reconnect
       // This is much faster than a full scan.
       final success = await _bleService.autoReconnect(gatewayId);
-      
+
       if (!success) {
         updateGatewayStatus(gatewayId, GatewayStatus.error);
         return;
@@ -323,7 +400,9 @@ class GatewayService {
         updateGatewayBleId(gatewayId, actualId);
       }
 
-      final effectiveId = (actualId != null && actualId != gatewayId) ? actualId : gatewayId;
+      final effectiveId = (actualId != null && actualId != gatewayId)
+          ? actualId
+          : gatewayId;
 
       // Step 2: Update gateway status
       final index = gateways.value.indexWhere((g) => g.id == effectiveId);
@@ -343,22 +422,8 @@ class GatewayService {
       // so it can show a proper dialog without needing a BuildContext here.
       _triggerLocationCheckIfDue(effectiveId);
 
-      // Step 4: Register this phone with a stable ID (idempotent on the ESP32).
-      // Uses a stable random ID stored in SharedPreferences so repeated connects
-      // and app reinstalls do not create duplicate registrations.
-      final stableId = await DevicePasswordService().getOrCreateStableDeviceId();
-      await _bleService.registerDevice(stableId);
-
-      // Step 4: Query how many mobile devices are registered on this gateway.
-      // Only devices registered to THIS gateway count — not nearby devices on others.
-      final deviceCount = await _bleService.queryDeviceCount();
-      if (deviceCount != null) {
-        updateGatewayDeviceCount(effectiveId, deviceCount);
-        DisasterRepository().updateGatewayStats(effectiveId, deviceCount: deviceCount)
-            .catchError((Object e) {
-          debugPrint('GatewayService: backend device count sync failed — $e');
-        });
-      }
+      // Step 4: Register this phone, then sync the count reported by this ESP32.
+      await registerCurrentPhoneAndSyncDeviceCount(effectiveId);
     } catch (e) {
       debugPrint('GatewayService: Connection failed — $e');
       updateGatewayStatus(gatewayId, GatewayStatus.error);
@@ -369,8 +434,8 @@ class GatewayService {
   Future<void> disconnectFromGateway(String gatewayId) async {
     try {
       await _bleService.disconnect();
-    updateGatewayStatus(gatewayId, GatewayStatus.disconnected);
-      
+      updateGatewayStatus(gatewayId, GatewayStatus.disconnected);
+
       final index = gateways.value.indexWhere((g) => g.id == gatewayId);
       if (index != -1) {
         final updated = gateways.value[index].copyWith(
@@ -418,7 +483,7 @@ class GatewayService {
   }
 
   // ---------- HOUSEHOLD PROFILE METHODS ----------
-  
+
   // Save household profile for a gateway
   Future<void> saveHouseholdProfile(HouseholdProfile profile) async {
     final updatedProfile = profile.copyWith(
@@ -453,7 +518,8 @@ class GatewayService {
     if (gateway.latitude == null || gateway.longitude == null) return;
 
     final last = gateway.lastLocationCheckAt;
-    final isDue = last == null ||
+    final isDue =
+        last == null ||
         DateTime.now().difference(last).inDays >= _locationCheckIntervalDays;
 
     if (isDue) {
@@ -497,10 +563,9 @@ class GatewayService {
           locationAddress: address,
         )
         .catchError((Object e) {
-      debugPrint('GatewayService: backend location sync failed — $e');
-    });
+          debugPrint('GatewayService: backend location sync failed — $e');
+        });
   }
 
   void dispose() {}
 }
-

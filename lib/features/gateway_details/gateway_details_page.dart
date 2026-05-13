@@ -16,16 +16,12 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_typography.dart';
 import '../ble/ble_service.dart';
 import '../ble/BLEConstants.dart';
-import '../ble/BLEConnectionManager.dart';
 import '../ble/activation_dialog.dart';
 
 class GatewayDetailsPage extends StatefulWidget {
   final String gatewayId;
 
-  const GatewayDetailsPage({
-    super.key,
-    required this.gatewayId,
-  });
+  const GatewayDetailsPage({super.key, required this.gatewayId});
 
   @override
   State<GatewayDetailsPage> createState() => _GatewayDetailsPageState();
@@ -35,6 +31,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
   final GatewayService _gatewayService = GatewayService();
   final BleService _bleService = BleService();
   bool _isConnecting = false;
+  bool _isDeleting = false;
 
   StatusType _getStatusType(GatewayStatus status) {
     switch (status) {
@@ -95,9 +92,18 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
     try {
       final controller = _bleService.bleConnection;
 
-      // ── Fast path: BLE link is already up (singleton survived navigation) ──
-      if (_bleService.isConnected.value && controller.isAuthenticated.value) {
-        _gatewayService.updateGatewayStatus(gateway.id, GatewayStatus.connected);
+      // ── Fast path: BLE link is already up for this gateway ──
+      final connectedId = _bleService.connectedDeviceId;
+      if (_bleService.isConnected.value &&
+          controller.isAuthenticated.value &&
+          (connectedId == null || connectedId == gateway.id)) {
+        _gatewayService.updateGatewayStatus(
+          gateway.id,
+          GatewayStatus.connected,
+        );
+        await _gatewayService.registerCurrentPhoneAndSyncDeviceCount(
+          connectedId ?? gateway.id,
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -163,8 +169,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         final activated = await showActivationDialog(context);
         if (!mounted) return;
         if (!activated) {
+          final messenger = ScaffoldMessenger.of(context);
           await _bleService.disconnect();
-          ScaffoldMessenger.of(context).showSnackBar(
+          messenger.showSnackBar(
             const SnackBar(
               content: Text('Cihaz aktive edilmedi — bağlantı kesildi'),
               backgroundColor: AppColors.warning,
@@ -183,11 +190,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         _gatewayService.updateGatewayBleId(gateway.id, realId);
       }
 
-      // Query how many mobile devices are registered to this gateway.
-      final deviceCount = await _bleService.queryDeviceCount();
-      if (deviceCount != null) {
-        _gatewayService.updateGatewayDeviceCount(realId, deviceCount);
-      }
+      await _gatewayService.registerCurrentPhoneAndSyncDeviceCount(realId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -219,16 +222,16 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
   Future<void> _disconnectGateway(Gateway gateway) async {
     try {
       await _bleService.disconnect();
-    await _gatewayService.disconnectFromGateway(gateway.id);
-      
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      await _gatewayService.disconnectFromGateway(gateway.id);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Bağlantı kesildi'),
-          backgroundColor: AppColors.warning,
-        ),
-      );
-    }
+            backgroundColor: AppColors.warning,
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -246,40 +249,59 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
     super.dispose();
   }
 
-  void _showDeleteDialog(Gateway gateway) {
-    showDialog(
+  Future<void> _showDeleteDialog(Gateway gateway) async {
+    if (_isDeleting) return;
+
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Cihazı Kaldır'),
         content: Text(
           '${gateway.name} cihazını kaldırmak istediğinize emin misiniz?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('İptal'),
           ),
           TextButton(
-            onPressed: () async {
-              final navigator = Navigator.of(context);
-              final messenger = ScaffoldMessenger.of(context);
-              await _gatewayService.removeGateway(gateway.id);
-              if (mounted) {
-                navigator.pop(); // Close dialog
-                navigator.pop(); // Go back to dashboard
-                messenger.showSnackBar(
-                  SnackBar(
-                    content: const Text('Cihaz kaldırıldı'),
-                    backgroundColor: AppColors.success,
-                  ),
-                );
-              }
-            },
-            child: const Text('Kaldır', style: TextStyle(color: AppColors.danger)),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text(
+              'Kaldır',
+              style: TextStyle(color: AppColors.danger),
+            ),
           ),
         ],
       ),
     );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isDeleting = true);
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await _gatewayService.removeGateway(gateway.id);
+      if (!mounted) return;
+
+      navigator.pushNamedAndRemoveUntil(AppRouter.dashboard, (_) => false);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Cihaz kaldırıldı'),
+          backgroundColor: AppColors.success,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isDeleting = false);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Cihaz kaldırılamadı: $e'),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+    }
   }
 
   void _copyToClipboard(String text, String label) {
@@ -299,9 +321,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
     if (gateway == null) {
       return AppScaffold(
         title: 'Cihaz Detayları',
-        body: const Center(
-          child: Text('Cihaz bulunamadı'),
-        ),
+        body: const Center(child: Text('Cihaz bulunamadı')),
       );
     }
 
@@ -310,7 +330,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
       actions: [
         IconButton(
           icon: const Icon(Icons.delete_outline),
-          onPressed: () => _showDeleteDialog(gateway),
+          onPressed: _isDeleting ? null : () => _showDeleteDialog(gateway),
         ),
       ],
       body: ValueListenableBuilder<List<Gateway>>(
@@ -318,10 +338,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
         builder: (context, gateways, _) {
           final updatedGateway = _gatewayService.getGateway(widget.gatewayId);
           if (updatedGateway == null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) Navigator.of(context).pop();
-            });
-            return const SizedBox.shrink();
+            return const Center(child: Text('Cihaz bulunamadı'));
           }
 
           return Column(
@@ -346,9 +363,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                       const SizedBox(height: AppSpacing.lg),
 
                       // Connection Info
-                      SectionHeader(
-                        title: 'Bağlantı Bilgileri',
-                      ),
+                      SectionHeader(title: 'Bağlantı Bilgileri'),
                       const SizedBox(height: AppSpacing.md),
                       _buildConnectionInfo(updatedGateway, context),
                       const SizedBox(height: AppSpacing.lg),
@@ -357,18 +372,14 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                       if (updatedGateway.hasCompleteAddress ||
                           updatedGateway.street != null ||
                           updatedGateway.city != null) ...[
-                        SectionHeader(
-                          title: 'Adres Bilgileri',
-                        ),
+                        SectionHeader(title: 'Adres Bilgileri'),
                         const SizedBox(height: AppSpacing.md),
                         _buildAddressCard(updatedGateway, context),
                         const SizedBox(height: AppSpacing.lg),
                       ],
 
                       // Statistics
-                      SectionHeader(
-                        title: 'İstatistikler',
-                      ),
+                      SectionHeader(title: 'İstatistikler'),
                       const SizedBox(height: AppSpacing.md),
                       _buildStatisticsCard(updatedGateway, context),
                       const SizedBox(height: AppSpacing.xl),
@@ -384,7 +395,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                   color: Theme.of(context).colorScheme.surface,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
+                      color: Colors.black.withValues(alpha: 0.1),
                       blurRadius: 10,
                       offset: const Offset(0, -2),
                     ),
@@ -412,7 +423,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                         SecondaryButton(
                           label: 'Bağlantıyı Kes',
                           icon: Icons.link_off,
-                          onPressed: _isConnecting ? null : () => _disconnectGateway(updatedGateway),
+                          onPressed: _isConnecting
+                              ? null
+                              : () => _disconnectGateway(updatedGateway),
                         )
                       else
                         PrimaryButton(
@@ -427,7 +440,10 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
                         label: 'Cihazı Kaldır',
                         icon: Icons.delete_outline,
                         isOutlined: true,
-                        onPressed: () => _showDeleteDialog(updatedGateway),
+                        isLoading: _isDeleting,
+                        onPressed: _isDeleting
+                            ? null
+                            : () => _showDeleteDialog(updatedGateway),
                       ),
                     ],
                   ),
@@ -443,7 +459,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
   Widget _buildHeroHeader(Gateway gateway, BuildContext context) {
     final theme = Theme.of(context);
     return ModernCard(
-      color: theme.colorScheme.primaryContainer.withOpacity(0.3),
+      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
       child: Row(
         children: [
           Container(
@@ -493,8 +509,8 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
             color: gateway.batteryLevel > 50
                 ? AppColors.success
                 : gateway.batteryLevel > 20
-                    ? AppColors.warning
-                    : AppColors.danger,
+                ? AppColors.warning
+                : AppColors.danger,
             progress: gateway.batteryLevel / 100,
           ),
         ),
@@ -510,10 +526,10 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
             color: gateway.signalStrength == null
                 ? AppColors.textSecondaryLight
                 : gateway.signalStrength! >= -60
-                    ? AppColors.success
-                    : gateway.signalStrength! >= -80
-                        ? AppColors.warning
-                        : AppColors.danger,
+                ? AppColors.success
+                : gateway.signalStrength! >= -80
+                ? AppColors.warning
+                : AppColors.danger,
             progress: gateway.signalStrength != null
                 ? ((gateway.signalStrength! + 100) / 50).clamp(0.0, 1.0)
                 : 0.0,
@@ -538,23 +554,22 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
           const SizedBox(height: AppSpacing.sm),
           Text(
             value,
-            style: AppTypography.headlineSmall(context).copyWith(
-              color: color,
-              fontWeight: FontWeight.bold,
-            ),
+            style: AppTypography.headlineSmall(
+              context,
+            ).copyWith(color: color, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
             label,
-            style: AppTypography.bodySmall(context).copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+            style: AppTypography.bodySmall(
+              context,
+            ).copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
           ),
           if (progress > 0) ...[
             const SizedBox(height: AppSpacing.sm),
             LinearProgressIndicator(
               value: progress,
-              backgroundColor: color.withOpacity(0.2),
+              backgroundColor: color.withValues(alpha: 0.2),
               valueColor: AlwaysStoppedAnimation<Color>(color),
               minHeight: 4,
               borderRadius: BorderRadius.circular(2),
@@ -617,10 +632,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text(
-                  address,
-                  style: AppTypography.bodyMedium(context),
-                ),
+                child: Text(address, style: AppTypography.bodyMedium(context)),
               ),
               IconButton(
                 icon: const Icon(Icons.copy),
@@ -669,7 +681,7 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
           Container(
             width: 1,
             height: 40,
-            color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+            color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.2),
           ),
           Expanded(
             child: _buildStatItem(
@@ -683,7 +695,9 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
             Container(
               width: 1,
               height: 40,
-              color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+              color: Theme.of(
+                context,
+              ).colorScheme.outline.withValues(alpha: 0.2),
             ),
             Expanded(
               child: _buildStatItem(
@@ -710,16 +724,13 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
       children: [
         Icon(icon, size: 24, color: theme.colorScheme.primary),
         const SizedBox(height: AppSpacing.xs),
-        Text(
-          value,
-          style: AppTypography.headlineSmall(context),
-        ),
+        Text(value, style: AppTypography.headlineSmall(context)),
         const SizedBox(height: AppSpacing.xs),
         Text(
           label,
-          style: AppTypography.bodySmall(context).copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+          style: AppTypography.bodySmall(
+            context,
+          ).copyWith(color: theme.colorScheme.onSurfaceVariant),
         ),
       ],
     );
@@ -744,17 +755,17 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
           children: [
             Text(
               label,
-              style: AppTypography.bodyMedium(context).copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+              style: AppTypography.bodyMedium(
+                context,
+              ).copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             Row(
               children: [
                 Text(
                   value,
-                  style: AppTypography.bodyMedium(context).copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
+                  style: AppTypography.bodyMedium(
+                    context,
+                  ).copyWith(fontWeight: FontWeight.w500),
                 ),
                 if (onTap != null) ...[
                   const SizedBox(width: AppSpacing.xs),
