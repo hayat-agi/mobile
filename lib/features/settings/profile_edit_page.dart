@@ -28,6 +28,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   final _emergencyNameController = TextEditingController();
   final _emergencyPhoneController = TextEditingController();
   final _emergencyRelationController = TextEditingController();
+  final _conditionController = TextEditingController();
+  final _medicationController = TextEditingController();
+  final _prostheticController = TextEditingController();
 
   String? _selectedBloodType;
   String? _selectedGender;
@@ -37,6 +40,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
   SystemOptions _options = SystemOptions.defaults();
   bool _isLoading = false;
   bool _isSaving = false;
+  bool _privacyAccepted = false;
 
   String get _pageTitle =>
       widget.isInitialSetup ? 'Profil Bilgileri' : 'Profil Düzenle';
@@ -53,6 +57,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     _emergencyNameController.dispose();
     _emergencyPhoneController.dispose();
     _emergencyRelationController.dispose();
+    _conditionController.dispose();
+    _medicationController.dispose();
+    _prostheticController.dispose();
     super.dispose();
   }
 
@@ -86,6 +93,17 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (widget.isInitialSetup && !_privacyAccepted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Devam etmek için bilgilendirme metnini onaylayın',
+          ),
+          backgroundColor: AppColors.danger,
+        ),
+      );
+      return;
+    }
 
     setState(() => _isSaving = true);
 
@@ -157,6 +175,19 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     });
   }
 
+  void _addCustomItem(TextEditingController controller, List<String> selected) {
+    final value = controller.text.trim();
+    if (value.isEmpty) return;
+
+    final exists = selected.any(
+      (item) => item.toLowerCase() == value.toLowerCase(),
+    );
+    if (!exists) {
+      setState(() => selected.add(value));
+    }
+    controller.clear();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -201,7 +232,9 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
                 prefixIcon: Icon(Icons.wc),
               ),
               items: _options.genderLabels.entries
-                  .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                  .map(
+                    (e) => DropdownMenuItem(value: e.key, child: Text(e.value)),
+                  )
                   .toList(),
               onChanged: (v) => setState(() => _selectedGender = v),
             ),
@@ -226,6 +259,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               'Tıbbi Durumlar',
               _options.medicalConditions,
               _selectedConditions,
+              _conditionController,
+              'Tıbbi durum ekle',
             ),
             const SizedBox(height: AppSpacing.md),
 
@@ -234,6 +269,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               'İlaçlar',
               _options.medications,
               _selectedMedications,
+              _medicationController,
+              'İlaç adı ekle',
             ),
             const SizedBox(height: AppSpacing.md),
 
@@ -242,6 +279,8 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               'Protez / Yardımcı Cihaz',
               _options.prosthetics,
               _selectedProsthetics,
+              _prostheticController,
+              'Protez veya yardımcı cihaz ekle',
             ),
             const SizedBox(height: AppSpacing.lg),
 
@@ -277,6 +316,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
               ),
             ),
             const SizedBox(height: AppSpacing.xl),
+
+            if (widget.isInitialSetup) ...[
+              _buildPrivacyConsentCard(theme),
+              const SizedBox(height: AppSpacing.lg),
+            ],
 
             PrimaryButton(
               label: widget.isInitialSetup ? 'Kaydet ve Devam Et' : 'Kaydet',
@@ -334,7 +378,11 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
     String title,
     List<String> options,
     List<String> selected,
+    TextEditingController customController,
+    String customHint,
   ) {
+    final visibleOptions = <String>{...options, ...selected}.toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -343,7 +391,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
         Wrap(
           spacing: AppSpacing.sm,
           runSpacing: AppSpacing.xs,
-          children: options.map((option) {
+          children: visibleOptions.map((option) {
             final isSelected = selected.contains(option);
             return FilterChip(
               label: Text(option),
@@ -352,7 +400,69 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
             );
           }).toList(),
         ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: customController,
+                decoration: InputDecoration(
+                  labelText: customHint,
+                  prefixIcon: const Icon(Icons.add_circle_outline),
+                ),
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) =>
+                    _addCustomItem(customController, selected),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            IconButton.filled(
+              tooltip: 'Ekle',
+              onPressed: () => _addCustomItem(customController, selected),
+              icon: const Icon(Icons.add),
+            ),
+          ],
+        ),
       ],
+    );
+  }
+
+  Widget _buildPrivacyConsentCard(ThemeData theme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: _privacyAccepted,
+              onChanged: (value) {
+                setState(() => _privacyAccepted = value ?? false);
+              },
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Bilgilendirme ve Onay',
+                    style: AppTypography.titleMedium(context),
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    'Paylaştığınız sağlık, ilaç, protez/yardımcı cihaz ve acil iletişim bilgileri afet anında size daha hızlı ve doğru destek sağlanabilmesi amacıyla kullanılacaktır. Bu bilgilerin doğru, güncel ve size ait olduğunu beyan eder; hatalı veya eksik bilgi girişinden doğabilecek sonuçlardan sorumlu olduğunuzu kabul edersiniz. Bilgileriniz yalnızca uygulamanın afet ve acil durum işlevleri kapsamında işlenir.',
+                    style: AppTypography.bodySmall(context).copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
