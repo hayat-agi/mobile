@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:get/get.dart';
@@ -19,7 +18,6 @@ import '../../services/gateway_service.dart';
 ///     • bleConnection — for GetX reactive pages
 ///     • ValueNotifier getters — for plain Flutter pages
 class BleService {
-
   // ── Singleton pattern ───────────────────────────────────────────
   static final BleService _instance = BleService._internal();
   factory BleService() => _instance;
@@ -58,10 +56,7 @@ class BleService {
       _results.value = List<ScanResult>.from(value);
     });
 
-    ever(
-      _bleConnection.messages,
-      (value) => _messages.value = value.toList(),
-    );
+    ever(_bleConnection.messages, (value) => _messages.value = value.toList());
   }
 
   // ── Getters for plain Flutter widgets ───────────────────────────
@@ -83,7 +78,9 @@ class BleService {
 
   /// Register a callback that fires whenever the ESP32 reports battery/RSSI status.
   /// Called with the gateway's BLE MAC and nullable bat/rssi values.
-  void setStatusUpdateCallback(void Function(String deviceId, int? bat, int? rssi) cb) {
+  void setStatusUpdateCallback(
+    void Function(String deviceId, int? bat, int? rssi) cb,
+  ) {
     _bleConnection.onStatusUpdate = cb;
   }
 
@@ -196,10 +193,7 @@ class BleService {
     await Future.doWhile(() async {
       await Future.delayed(const Duration(milliseconds: 500));
       return _bleConnection.isScanning.value;
-    }).timeout(
-      const Duration(seconds: 12),
-      onTimeout: () {},
-    );
+    }).timeout(const Duration(seconds: 12), onTimeout: () {});
 
     if (results.value.isEmpty) {
       throw Exception('No BLE devices found for SOS');
@@ -227,7 +221,9 @@ class BleService {
   /// Delegates to [BleConnection.waitForActivationPrompt] which checks the
   /// RxBool source of truth directly — avoids the async sync delay between
   /// the GetX observable and the mirrored ValueNotifier.
-  Future<bool> waitForActivationPrompt({Duration timeout = const Duration(seconds: 5)}) async {
+  Future<bool> waitForActivationPrompt({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
     return _bleConnection.waitForActivationPrompt(timeout: timeout);
   }
 

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:get/get.dart';
@@ -26,29 +25,29 @@ import 'BLEConstants.dart';
 // ═══════════════════════════════════════════════════════════════════════════
 
 class BleConnection extends GetxController {
-
   // ── These are "reactive" variables ──
   // GetX watches them. When they change, the UI auto-updates.
-  final isScanning = false.obs;      // true while we're scanning for devices
-  final isConnected = false.obs;     // true when BLE link is active
+  final isScanning = false.obs; // true while we're scanning for devices
+  final isConnected = false.obs; // true when BLE link is active
   final isAuthenticated = false.obs; // true when ready to send commands
-  final status = 'Idle'.obs;        // short status text shown in the UI
-  final results = <ScanResult>[].obs;  // list of discovered BLE devices
-  final messages = <String>[].obs;     // chat-style message log
+  final status = 'Idle'.obs; // short status text shown in the UI
+  final results = <ScanResult>[].obs; // list of discovered BLE devices
+  final messages = <String>[].obs; // chat-style message log
 
   // ── Activation state ──
-  final needsActivation = false.obs;   // true when ESP32 is in factory state
+  final needsActivation = false.obs; // true when ESP32 is in factory state
 
   // ── Private stuff (not visible to the UI) ──
-  BluetoothDevice? _device;               // the ESP32 we're connected to
-  BluetoothCharacteristic? _rx;           // characteristic we write to
-  BluetoothCharacteristic? _tx;           // characteristic we get notifications from
-  BluetoothCharacteristic? _sensor;       // MPU-6050 sensor stream characteristic
+  BluetoothDevice? _device; // the ESP32 we're connected to
+  BluetoothCharacteristic? _rx; // characteristic we write to
+  BluetoothCharacteristic? _tx; // characteristic we get notifications from
+  BluetoothCharacteristic? _sensor; // MPU-6050 sensor stream characteristic
 
-  StreamSubscription<List<ScanResult>>? _scanSub;       // scan results listener
-  StreamSubscription<BluetoothConnectionState>? _connSub; // connection state listener
-  StreamSubscription<List<int>>? _notifySub;             // notification listener
-  StreamSubscription<List<int>>? _sensorSub;             // sensor stream listener
+  StreamSubscription<List<ScanResult>>? _scanSub; // scan results listener
+  StreamSubscription<BluetoothConnectionState>?
+  _connSub; // connection state listener
+  StreamSubscription<List<int>>? _notifySub; // notification listener
+  StreamSubscription<List<int>>? _sensorSub; // sensor stream listener
 
   /// Broadcast stream of raw 24-byte MPU-6050 sensor packets from the ESP32.
   /// Emits whenever a sensor NOTIFY arrives. Empty when no ESP32 is connected.
@@ -69,8 +68,9 @@ class BleConnection extends GetxController {
   // notification arrives from the ESP32. Think of it as a one-shot mailbox.
   Completer<String>? _responseCompleter;
 
-  // Serialises concurrent sendHexPayload calls — the second caller waits
-  // for the first to finish rather than superseding it.
+  // Serialises commands that wait for a single ESP32 notification response.
+  // Without this, a heartbeat or a second command can supersede the active
+  // response completer and make the caller consume the wrong response.
   Completer<void>? _sendLock;
 
   /// Completer for NEED_ACTIVATION — used when adding a new gateway.
@@ -161,7 +161,18 @@ class BleConnection extends GetxController {
   /// Set the target device ID for auto-reconnect (used by SOS flow
   /// when the queue system needs to know which gateway to reconnect to).
   void setLastDeviceId(String deviceId) {
-    _lastDeviceId ??= deviceId;
+    _lastDeviceId = deviceId;
+  }
+
+  Future<void> _queueMessage(String text) async {
+    if (_messageQueue.length >= BleConstants.maxQueueSize) {
+      final dropped = _messageQueue.removeAt(0);
+      messages.add('[System] Kuyruk dolu — eski mesaj silindi: $dropped');
+    }
+    _messageQueue.add(text);
+    await _persistQueue();
+    messages.add('ME: $text');
+    unawaited(_reconnectAndDrainQueue());
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -292,7 +303,10 @@ class BleConnection extends GetxController {
       });
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
 
-      final result = await foundC.future.timeout(const Duration(seconds: 5), onTimeout: () => null);
+      final result = await foundC.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => null,
+      );
       await sub.cancel();
       await FlutterBluePlus.stopScan();
 
@@ -323,19 +337,32 @@ class BleConnection extends GetxController {
     final c = _activationPromptCompleter;
     if (c == null) {
       // Completer missing — notification may still be in flight, wait briefly
-      debugPrint('[ACTIVATION] waitForActivationPrompt → completer NULL, waiting 1500ms');
+      debugPrint(
+        '[ACTIVATION] waitForActivationPrompt → completer NULL, waiting 1500ms',
+      );
       await Future.delayed(const Duration(milliseconds: 1500));
       final result = needsActivation.value;
-      debugPrint('[ACTIVATION] waitForActivationPrompt → fallback result=$result');
+      debugPrint(
+        '[ACTIVATION] waitForActivationPrompt → fallback result=$result',
+      );
       return result;
     }
     try {
-      debugPrint('[ACTIVATION] waitForActivationPrompt → waiting on completer (${timeout.inSeconds}s timeout)');
-      final result = await c.future.timeout(timeout, onTimeout: () => needsActivation.value);
-      debugPrint('[ACTIVATION] waitForActivationPrompt → completer result=$result');
+      debugPrint(
+        '[ACTIVATION] waitForActivationPrompt → waiting on completer (${timeout.inSeconds}s timeout)',
+      );
+      final result = await c.future.timeout(
+        timeout,
+        onTimeout: () => needsActivation.value,
+      );
+      debugPrint(
+        '[ACTIVATION] waitForActivationPrompt → completer result=$result',
+      );
       return result;
     } catch (e) {
-      debugPrint('[ACTIVATION] waitForActivationPrompt → error: $e, needsActivation=${needsActivation.value}');
+      debugPrint(
+        '[ACTIVATION] waitForActivationPrompt → error: $e, needsActivation=${needsActivation.value}',
+      );
       return needsActivation.value;
     } finally {
       _activationPromptCompleter = null;
@@ -352,7 +379,8 @@ class BleConnection extends GetxController {
 
     // ── Clean activation state from any previous connection ──
     needsActivation.value = false;
-    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+    if (_activationPromptCompleter != null &&
+        !_activationPromptCompleter!.isCompleted) {
       _activationPromptCompleter!.complete(false);
     }
     _activationPromptCompleter = null;
@@ -421,8 +449,8 @@ class BleConnection extends GetxController {
 
       for (final c in service.characteristics) {
         final uuid = c.uuid.toString().toLowerCase();
-        if (uuid == BleConstants.charRxUuid.toLowerCase())     _rx = c;
-        if (uuid == BleConstants.charTxUuid.toLowerCase())     _tx = c;
+        if (uuid == BleConstants.charRxUuid.toLowerCase()) _rx = c;
+        if (uuid == BleConstants.charTxUuid.toLowerCase()) _tx = c;
         if (uuid == BleConstants.charSensorUuid.toLowerCase()) _sensor = c;
       }
 
@@ -509,15 +537,7 @@ class BleConnection extends GetxController {
     // If not connected, queue the message and reconnect transparently
     if (_rx == null || !isConnected.value) {
       if (_lastDeviceId != null) {
-        // Enforce queue size limit — drop oldest if full
-        if (_messageQueue.length >= BleConstants.maxQueueSize) {
-          final dropped = _messageQueue.removeAt(0);
-          messages.add('[System] Kuyruk dolu — eski mesaj silindi: $dropped');
-        }
-        _messageQueue.add(text);
-        _persistQueue();
-        messages.add('ME: $text');
-        _reconnectAndDrainQueue();
+        await _queueMessage(text);
         return;
       }
       // No saved gateway — message cannot be queued, log it visibly
@@ -541,7 +561,9 @@ class BleConnection extends GetxController {
         break;
       default:
         final packetError = _packetAckError(response);
-        messages.add(packetError == null ? 'ESP32: $response' : '[System] $packetError');
+        messages.add(
+          packetError == null ? 'ESP32: $response' : '[System] $packetError',
+        );
         break;
     }
   }
@@ -554,10 +576,7 @@ class BleConnection extends GetxController {
   /// Returns a result object with success/failure info.
   Future<ActivationResult> sendActivationPassword(String password) async {
     if (_rx == null || !isConnected.value) {
-      return ActivationResult(
-        success: false,
-        message: 'Cihaza bağlı değil',
-      );
+      return ActivationResult(success: false, message: 'Cihaza bağlı değil');
     }
 
     _isWaitingForActivationResponse = true;
@@ -591,7 +610,9 @@ class BleConnection extends GetxController {
       }
 
       if (response.startsWith(BleConstants.respWrongPwPrefix)) {
-        final remaining = response.substring(BleConstants.respWrongPwPrefix.length);
+        final remaining = response.substring(
+          BleConstants.respWrongPwPrefix.length,
+        );
         return ActivationResult(
           success: false,
           message: 'Yanlış şifre — $remaining deneme hakkı kaldı',
@@ -600,7 +621,9 @@ class BleConnection extends GetxController {
       }
 
       if (response.startsWith(BleConstants.respLockedPrefix)) {
-        final seconds = response.substring(BleConstants.respLockedPrefix.length);
+        final seconds = response.substring(
+          BleConstants.respLockedPrefix.length,
+        );
         return ActivationResult(
           success: false,
           message: 'Çok fazla hatalı deneme — $seconds saniye bekleyin',
@@ -613,10 +636,7 @@ class BleConnection extends GetxController {
         message: 'Beklenmeyen yanıt: $response',
       );
     } catch (e) {
-      return ActivationResult(
-        success: false,
-        message: 'Hata: $e',
-      );
+      return ActivationResult(success: false, message: 'Hata: $e');
     } finally {
       _isWaitingForActivationResponse = false;
     }
@@ -635,8 +655,9 @@ class BleConnection extends GetxController {
     try {
       messages.add('ME: ${BleConstants.cmdFactoryReset}');
 
-      final response =
-          await _writeAndWaitResponse(BleConstants.cmdFactoryReset);
+      final response = await _writeAndWaitResponse(
+        BleConstants.cmdFactoryReset,
+      );
 
       if (response == BleConstants.respResetOk) {
         messages.add('[System] Factory reset confirmed — device rebooting');
@@ -754,7 +775,8 @@ class BleConnection extends GetxController {
     isConnected.value = false;
     isAuthenticated.value = false;
     needsActivation.value = false;
-    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+    if (_activationPromptCompleter != null &&
+        !_activationPromptCompleter!.isCompleted) {
       _activationPromptCompleter!.complete(false);
     }
     _activationPromptCompleter = null;
@@ -772,23 +794,30 @@ class BleConnection extends GetxController {
   ///   2. Writes the text to the ESP32's RX characteristic
   ///   3. Waits up to 5 seconds for a notification on TX
   ///   4. Returns the response string, or null if it timed out
-  Future<String?> _writeAndWaitResponse(String text, {Duration? timeout}) async {
+  Future<String?> _writeAndWaitResponse(
+    String text, {
+    Duration? timeout,
+  }) async {
     if (_rx == null) return null;
 
-    // Cancel any previous pending response
-    if (_responseCompleter != null && !_responseCompleter!.isCompleted) {
-      _responseCompleter!.completeError('Superseded');
+    if (_sendLock != null) {
+      await _sendLock!.future;
     }
+
+    if (_rx == null || !isConnected.value) return null;
+
+    final lock = Completer<void>();
+    _sendLock = lock;
 
     // Create the "mailbox" BEFORE writing, so we don't miss fast responses
     _responseCompleter = Completer<String>();
     final completer = _responseCompleter!;
     final waitTimeout = timeout ?? BleConstants.responseTimeout;
 
-    // Write the text as UTF-8 bytes
-    await _rx!.write(utf8.encode(text), withoutResponse: false);
-
     try {
+      // Write the text as UTF-8 bytes
+      await _rx!.write(utf8.encode(text), withoutResponse: false);
+
       // Wait for the ESP32's response
       final response = await completer.future.timeout(
         waitTimeout,
@@ -804,26 +833,38 @@ class BleConnection extends GetxController {
       if (_responseCompleter == completer) {
         _responseCompleter = null;
       }
+      if (_sendLock == lock) {
+        _sendLock = null;
+      }
+      lock.complete();
     }
   }
 
   /// Called automatically whenever the ESP32 sends us a notification.
   /// This is how we receive responses after writing.
   void _onNotification(List<int> data) {
-    final msg = utf8.decode(data, allowMalformed: true).replaceAll('\x00', '').trim();
+    final msg = utf8
+        .decode(data, allowMalformed: true)
+        .replaceAll('\x00', '')
+        .trim();
     if (msg.isEmpty) return;
 
     debugPrint('[NOTIFY] Received: "$msg" (${data.length} bytes, raw=$data)');
 
     // Unsolicited activation prompt from ESP32 — set flag and complete waiter
     if (msg == BleConstants.respNeedActivation) {
-      debugPrint('[ACTIVATION] NEED_ACTIVATION received — setting flag & completing completer');
+      debugPrint(
+        '[ACTIVATION] NEED_ACTIVATION received — setting flag & completing completer',
+      );
       needsActivation.value = true;
-      if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+      if (_activationPromptCompleter != null &&
+          !_activationPromptCompleter!.isCompleted) {
         _activationPromptCompleter!.complete(true);
         debugPrint('[ACTIVATION] Completer completed with TRUE');
       } else {
-        debugPrint('[ACTIVATION] Completer was ${_activationPromptCompleter == null ? "NULL" : "already completed"}');
+        debugPrint(
+          '[ACTIVATION] Completer was ${_activationPromptCompleter == null ? "NULL" : "already completed"}',
+        );
       }
       messages.add('[System] Cihaz aktivasyon bekliyor');
       return;
@@ -857,9 +898,7 @@ class BleConnection extends GetxController {
     _autoReleaseTimer?.cancel();
     _autoReleaseTimer = null;
     _stopHeartbeat();
-    _cancelSubscriptions(
-      delayResponseCancel: _isWaitingForActivationResponse,
-    );
+    _cancelSubscriptions(delayResponseCancel: _isWaitingForActivationResponse);
 
     _device = null;
     _rx = null;
@@ -868,7 +907,8 @@ class BleConnection extends GetxController {
     isConnected.value = false;
     isAuthenticated.value = false;
     needsActivation.value = false;
-    if (_activationPromptCompleter != null && !_activationPromptCompleter!.isCompleted) {
+    if (_activationPromptCompleter != null &&
+        !_activationPromptCompleter!.isCompleted) {
       _activationPromptCompleter!.complete(false);
     }
     _activationPromptCompleter = null;
@@ -939,17 +979,18 @@ class BleConnection extends GetxController {
       final deviceId = _lastDeviceId;
       if (deviceId == null || _messageQueue.isEmpty) return;
 
-      for (int attempt = 0;
-          attempt < BleConstants.maxQueueRetries;
-          attempt++) {
+      for (int attempt = 0; attempt < BleConstants.maxQueueRetries; attempt++) {
         if (isConnected.value) break;
 
         if (attempt > 0) {
           // Exponential backoff capped at maxRetryBackoff
-          final baseMs = BleConstants.initialRetryDelay.inMilliseconds *
+          final baseMs =
+              BleConstants.initialRetryDelay.inMilliseconds *
               (1 << (attempt - 1)); // 2s, 4s, 8s, …
           final cappedMs = baseMs.clamp(
-              0, BleConstants.maxRetryBackoff.inMilliseconds);
+            0,
+            BleConstants.maxRetryBackoff.inMilliseconds,
+          );
           final jitterMs = rng.nextInt(1500);
           final delay = Duration(milliseconds: cappedMs + jitterMs);
           status.value =
@@ -974,9 +1015,11 @@ class BleConnection extends GetxController {
       }
 
       if (!isConnected.value) {
-        messages.add('[System] Gateway unreachable after '
-            '${BleConstants.maxQueueRetries} attempts — '
-            '${_messageQueue.length} message(s) saved');
+        messages.add(
+          '[System] Gateway unreachable after '
+          '${BleConstants.maxQueueRetries} attempts — '
+          '${_messageQueue.length} message(s) saved',
+        );
         _persistQueue();
         return;
       }
@@ -985,8 +1028,7 @@ class BleConnection extends GetxController {
       // maxMessagesPerDrain messages, then release for others.
       int sent = 0;
       while (_messageQueue.isNotEmpty && isConnected.value) {
-        if (disasterMode &&
-            sent >= BleConstants.maxMessagesPerDrain) {
+        if (disasterMode && sent >= BleConstants.maxMessagesPerDrain) {
           break; // let others take a turn
         }
 
@@ -1000,7 +1042,9 @@ class BleConnection extends GetxController {
           // is the first thing retried on the next connection.
           _messageQueue.insert(0, msg);
           _persistQueue();
-          messages.add('[System] Gönderim zaman aşımı — mesaj yeniden kuyruğa alındı');
+          messages.add(
+            '[System] Gönderim zaman aşımı — mesaj yeniden kuyruğa alındı',
+          );
           break; // Stop this drain cycle; reconnect will retry
         } else if (response == BleConstants.respMsgOk) {
           // success — already removed from queue
@@ -1093,8 +1137,8 @@ class BleConnection extends GetxController {
       _sensor = null;
       for (final c in service.characteristics) {
         final uuid = c.uuid.toString().toLowerCase();
-        if (uuid == BleConstants.charRxUuid.toLowerCase())     _rx = c;
-        if (uuid == BleConstants.charTxUuid.toLowerCase())     _tx = c;
+        if (uuid == BleConstants.charRxUuid.toLowerCase()) _rx = c;
+        if (uuid == BleConstants.charTxUuid.toLowerCase()) _tx = c;
         if (uuid == BleConstants.charSensorUuid.toLowerCase()) _sensor = c;
       }
 
@@ -1227,7 +1271,7 @@ class BleConnection extends GetxController {
   ///
   /// This gives the triage payload the same persistent, retrying delivery
   /// guarantee that text SOS messages already have.
-  /// The ESP32 receives "BIN:<hex>" as an unknown command and replies MSG_OK,
+  /// The ESP32 receives `BIN:<hex>` as an unknown command and replies MSG_OK,
   /// which is sufficient for the current protocol version.
   Future<void> sendBinaryQueued(Uint8List payload) async {
     if (payload.isEmpty) return;
@@ -1242,17 +1286,21 @@ class BleConnection extends GetxController {
       // Direct send failed — fall through to queue
     }
 
-    // Encode as hex and queue with full retry/persistence support
+    // Encode as hex and queue with full retry/persistence support.
+    // This path also handles failed direct binary sends; avoid send(encoded)
+    // here because connected sends are immediate and are not persisted.
     final hex = payload.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     final encoded = 'BIN:$hex';
 
     // Warn when the encoded string exceeds the MTU — ESP32 will reject it
     // with MSG_BAD_LEN, which is now handled gracefully in the drain loop.
     if (encoded.length > BleConstants.maxMtu) {
-      debugPrint('[BLE] Warning: encoded payload ${encoded.length} bytes exceeds MTU ${BleConstants.maxMtu} — ESP32 will reject with MSG_BAD_LEN');
+      debugPrint(
+        '[BLE] Warning: encoded payload ${encoded.length} bytes exceeds MTU ${BleConstants.maxMtu} — ESP32 will reject with MSG_BAD_LEN',
+      );
     }
 
-    await send(encoded);
+    await _queueMessage(encoded);
   }
 
   /// Registers this phone with the ESP32 using a stable app-provided ID.
@@ -1271,7 +1319,9 @@ class BleConnection extends GetxController {
   Future<int?> queryDeviceCount() async {
     if (_rx == null || !isConnected.value) return null;
 
-    final response = await _writeAndWaitResponse(BleConstants.cmdGetDeviceCount);
+    final response = await _writeAndWaitResponse(
+      BleConstants.cmdGetDeviceCount,
+    );
     if (response == null) return null;
 
     if (response.startsWith(BleConstants.respDeviceCountPrefix)) {
@@ -1305,7 +1355,10 @@ class BleConnection extends GetxController {
 
       _pingInFlight = true;
       try {
-        final response = await _writeAndWaitResponse('PING', timeout: _pingTimeout);
+        final response = await _writeAndWaitResponse(
+          'PING',
+          timeout: _pingTimeout,
+        );
         if (response == 'PONG') {
           _heartbeatFailCount = 0;
           debugPrint('[Heartbeat] PONG received — connection healthy');
@@ -1319,7 +1372,9 @@ class BleConnection extends GetxController {
           } catch (_) {}
         } else {
           _heartbeatFailCount++;
-          debugPrint('[Heartbeat] No PONG (got: $response) — fail $_heartbeatFailCount/$_maxHeartbeatFails');
+          debugPrint(
+            '[Heartbeat] No PONG (got: $response) — fail $_heartbeatFailCount/$_maxHeartbeatFails',
+          );
           if (_heartbeatFailCount >= _maxHeartbeatFails) {
             _stopHeartbeat();
             _onUnexpectedDisconnect();
@@ -1356,14 +1411,19 @@ class BleConnection extends GetxController {
         if (isConnected.value || _intentionalDisconnect) break;
 
         // Backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped) + jitter
-        final baseMs = attempt == 0 ? 1000 : (2000 * (1 << (attempt - 1))).clamp(0, 30000);
+        final baseMs = attempt == 0
+            ? 1000
+            : (2000 * (1 << (attempt - 1))).clamp(0, 30000);
         final jitterMs = rng.nextInt(1000);
         await Future.delayed(Duration(milliseconds: baseMs + jitterMs));
 
         if (_intentionalDisconnect) break;
 
-        status.value = 'Otomatik yeniden bağlanılıyor (${attempt + 1}/$_maxAutoReconnectAttempts)…';
-        debugPrint('[Heartbeat] Auto-reconnect attempt ${attempt + 1}/$_maxAutoReconnectAttempts');
+        status.value =
+            'Otomatik yeniden bağlanılıyor (${attempt + 1}/$_maxAutoReconnectAttempts)…';
+        debugPrint(
+          '[Heartbeat] Auto-reconnect attempt ${attempt + 1}/$_maxAutoReconnectAttempts',
+        );
 
         // Fast path first, then full scan fallback
         await _directReconnect(deviceId);

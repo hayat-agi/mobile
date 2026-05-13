@@ -60,18 +60,19 @@ class DisasterController extends GetxController {
       return DisasterSendResult.failed();
     }
 
-    if (savedGateways.isNotEmpty) {
-      _bleService.bleConnection.setLastDeviceId(savedGateways.first.id);
+    final connectedGatewayId = _bleService.connectedDeviceId;
+    final gatewayId =
+        connectedGatewayId ??
+        (savedGateways.isNotEmpty ? savedGateways.first.id : null);
+    if (gatewayId == null) {
+      return DisasterSendResult.failed();
     }
+    _bleService.bleConnection.setLastDeviceId(gatewayId);
 
     isSending.value = true;
     try {
       HouseholdProfile? household;
-      if (savedGateways.isNotEmpty) {
-        household = GatewayService().getHouseholdProfile(
-          savedGateways.first.id,
-        );
-      }
+      household = GatewayService().getHouseholdProfile(gatewayId);
 
       final packet = DisasterMessagePacket(
         healthProfile: _healthProfile,
@@ -82,10 +83,7 @@ class DisasterController extends GetxController {
       lastSendSuccess.value = true;
 
       var syncedToBackend = false;
-      final gatewayId = savedGateways.isNotEmpty
-          ? savedGateways.first.id
-          : null;
-      if (gatewayId != null) {
+      {
         final phoneId = await DevicePasswordService()
             .getOrCreateStableDeviceId();
         final gateway = GatewayService().getGateway(gatewayId);

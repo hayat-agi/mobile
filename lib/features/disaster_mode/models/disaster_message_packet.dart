@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../../../models/household_profile.dart';
+import '../../ble/BLEConstants.dart';
 import 'user_health_profile.dart';
 
 /// v4 binary protocol (preferred):
@@ -21,6 +22,7 @@ class DisasterMessagePacket {
 
   static const int _maxMessageBytes = 180;
   static const int _maxHouseholdBytes = 280;
+  static const int _binPrefixBytes = 4; // "BIN:"
 
   final UserHealthProfile healthProfile;
   final String messageText;
@@ -47,23 +49,22 @@ class DisasterMessagePacket {
     return out;
   }
 
-  static List<int> _truncateUtf8Raw(List<int> raw, int maxBytes) {
-    if (raw.length <= maxBytes) return raw;
-    var end = maxBytes;
-    while (end > 0 && (raw[end - 1] & 0xC0) == 0x80) {
-      end--;
-    }
-    return raw.sublist(0, end);
-  }
-
   Uint8List encode() {
-    final msgBytes = _truncateUtf8ToMaxBytes(messageText, _maxMessageBytes);
+    // sendBinaryQueued persists packets as "BIN:<hex>" when it cannot deliver
+    // immediately. Keep the raw packet small enough that this text fallback
+    // still fits in one ESP32 command frame.
+    final maxPacketBytes = (BleConstants.maxMtu - _binPrefixBytes) ~/ 2;
+    final maxMsgBytes = (maxPacketBytes - 9).clamp(0, _maxMessageBytes);
+    final msgBytes = _truncateUtf8ToMaxBytes(messageText, maxMsgBytes);
 
     List<int> hhBytes = const <int>[];
     if (_hasHouseholdPayload) {
       final jsonStr = jsonEncode(household!.toJson());
       final raw = utf8.encode(jsonStr);
-      hhBytes = _truncateUtf8Raw(raw, _maxHouseholdBytes);
+      final remaining = maxPacketBytes - 9 - msgBytes.length;
+      if (raw.length <= remaining && raw.length <= _maxHouseholdBytes) {
+        hhBytes = raw;
+      }
     }
 
     final hhLen = hhBytes.length;
