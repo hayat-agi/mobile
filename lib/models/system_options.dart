@@ -3,15 +3,22 @@ class SystemOptions {
   final List<String> medicalConditions;
   final List<String> medications;
   final List<String> prosthetics;
-  final List<String> genderOptions;
+
+  // Gender is stored as backend enum key ('male', 'female', ...) and shown to
+  // the user with the matching label ('Erkek', 'Kadın', ...). Keeping the
+  // mapping intact lets the dropdown display labels while sending keys to the
+  // server, which is the value the schema actually validates against.
+  final Map<String, String> genderLabels;
 
   SystemOptions({
     required this.bloodTypes,
     required this.medicalConditions,
     required this.medications,
     required this.prosthetics,
-    required this.genderOptions,
+    required this.genderLabels,
   });
+
+  List<String> get genderKeys => genderLabels.keys.toList();
 
   factory SystemOptions.fromJson(Map<String, dynamic> json) {
     final health = json['healthOptions'] as Map<String, dynamic>? ?? {};
@@ -21,7 +28,7 @@ class SystemOptions {
       medicalConditions: _parseStringList(health['chronicConditions']),
       medications: _parseStringList(health['medications']),
       prosthetics: _parseStringList(health['prostheses']),
-      genderOptions: genderMap.values.map((e) => e.toString()).toList(),
+      genderLabels: genderMap.map((k, v) => MapEntry(k, v.toString())),
     );
   }
 
@@ -31,7 +38,13 @@ class SystemOptions {
       medicalConditions: ['Diyabet', 'Hipertansiyon', 'Astım', 'Kalp Hastalığı', 'Epilepsi'],
       medications: ['İnsülin', 'Ventolin', 'Aspirin'],
       prosthetics: ['Protez Bacak', 'Protez Kol', 'İşitme Cihazı', 'Gözlük'],
-      genderOptions: ['Erkek', 'Kadın', 'Diğer'],
+      // Must mirror backend GENDER_LABELS exactly — sending a label that
+      // doesn't reverse-map to a key trips the schema enum validator.
+      genderLabels: {
+        'male': 'Erkek',
+        'female': 'Kadın',
+        'prefer_not_to_say': 'Belirtmek İstemiyorum',
+      },
     );
   }
 
