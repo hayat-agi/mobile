@@ -1,3 +1,4 @@
+import '../../models/backend_gateway.dart';
 import '../../models/household_member.dart';
 import '../../models/pet.dart';
 import 'gateway_repository.dart';
@@ -14,23 +15,32 @@ class HouseholdSyncService {
     try {
       // Fetch current backend state
       final gateways = await _gatewayRepository.fetchUserGateways();
-      final backendGateway = gateways.where((g) => g.id == gatewayId).firstOrNull;
+      final backendGateway = gateways
+          .where((gateway) => _matchesGateway(gateway, gatewayId))
+          .firstOrNull;
 
       if (backendGateway == null) return false;
+
+      final backendGatewayId = backendGateway.id.isNotEmpty
+          ? backendGateway.id
+          : gatewayId;
 
       // TODO(backend): Replace delete-all-recreate with ownership-aware upsert when backend supports per-user citizens.
       // Remove existing citizens and pets first, then re-add
       for (final citizen in backendGateway.citizens) {
         if (citizen.id != null) {
           try {
-            await _gatewayRepository.removeCitizen(gatewayId, citizen.id!);
+            await _gatewayRepository.removeCitizen(
+              backendGatewayId,
+              citizen.id!,
+            );
           } catch (_) {}
         }
       }
       for (final pet in backendGateway.pets) {
         if (pet.id != null) {
           try {
-            await _gatewayRepository.removePet(gatewayId, pet.id!);
+            await _gatewayRepository.removePet(backendGatewayId, pet.id!);
           } catch (_) {}
         }
       }
@@ -38,13 +48,13 @@ class HouseholdSyncService {
       // Add members as citizens
       for (final member in members) {
         final citizenData = _memberToCitizenData(member);
-        await _gatewayRepository.addCitizen(gatewayId, citizenData);
+        await _gatewayRepository.addCitizen(backendGatewayId, citizenData);
       }
 
       // Add pets
       for (final pet in pets) {
         final petData = _petToBackendData(pet);
-        await _gatewayRepository.addPet(gatewayId, petData);
+        await _gatewayRepository.addPet(backendGatewayId, petData);
       }
 
       return true;
@@ -53,9 +63,30 @@ class HouseholdSyncService {
     }
   }
 
+  bool _matchesGateway(BackendGateway backendGateway, String localGatewayId) {
+    final localId = _normalizeGatewayIdentifier(localGatewayId);
+    if (localId == null) return false;
+
+    return [
+      backendGateway.id,
+      backendGateway.serialNumber,
+      backendGateway.macAddress,
+    ].any((value) => _normalizeGatewayIdentifier(value) == localId);
+  }
+
+  String? _normalizeGatewayIdentifier(String? value) {
+    final trimmed = value?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    return trimmed.toLowerCase();
+  }
+
   Map<String, dynamic> _memberToCitizenData(HouseholdMember member) {
     final now = DateTime.now();
-    final estimatedBirthDate = DateTime(now.year - member.age, 1, 1).toIso8601String();
+    final estimatedBirthDate = DateTime(
+      now.year - member.age,
+      1,
+      1,
+    ).toIso8601String();
     final birthDate = (member.birthDate != null && member.birthDate!.isNotEmpty)
         ? member.birthDate!
         : estimatedBirthDate;

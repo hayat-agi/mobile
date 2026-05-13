@@ -186,11 +186,18 @@ class _GatewayDetailsPageState extends State<GatewayDetailsPage> {
       // If the gateway was added with a manually-entered ID, update it
       // to the real BLE remoteId so future reconnects work reliably.
       final realId = deviceResult.device.remoteId.toString();
+      var effectiveId = gateway.id;
       if (gateway.id != realId) {
-        _gatewayService.updateGatewayBleId(gateway.id, realId);
+        final idUpdated = await _gatewayService.updateGatewayBleId(
+          gateway.id,
+          realId,
+        );
+        if (idUpdated) {
+          effectiveId = realId;
+        }
       }
 
-      await _gatewayService.registerCurrentPhoneAndSyncDeviceCount(realId);
+      await _gatewayService.registerCurrentPhoneAndSyncDeviceCount(effectiveId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
