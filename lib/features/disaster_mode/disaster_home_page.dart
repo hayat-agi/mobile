@@ -430,9 +430,11 @@ class _DisasterHomePageState extends State<DisasterHomePage> {
       if (result.syncedToBackend) {
         _onUserMessageSent(text);
       }
-      final statusMessage = result.syncedToBackend
-          ? 'Mesaj web arayüzüne iletildi ✓'
-          : 'Mesaj web arayüzüne ulaşmadı';
+      final statusMessage = _ctrl.isConnected && !result.syncedToBackend
+          ? 'Hayat Ağı cihazına ulaştı ✓'
+          : result.syncedToBackend
+              ? 'Mesaj web arayüzüne iletildi ✓'
+              : 'Mesaj web arayüzüne ulaşmadı';
       _showSendStatus(
         statusMessage,
         result.syncedToBackend ? Colors.green : Colors.orange,
