@@ -83,7 +83,7 @@ class DisasterController extends GetxController {
       lastSendSuccess.value = true;
 
       var syncedToBackend = false;
-      {
+      if (!isConnected) {
         final phoneId = await DevicePasswordService()
             .getOrCreateStableDeviceId();
         final gateway = GatewayService().getGateway(gatewayId);
@@ -122,7 +122,7 @@ class DisasterController extends GetxController {
 
       return DisasterSendResult(
         sentOrQueued: true,
-        syncedToBackend: syncedToBackend,
+        syncedToBackend: syncedToBackend || isConnected,
       );
     } catch (_) {
       lastSendSuccess.value = false;
