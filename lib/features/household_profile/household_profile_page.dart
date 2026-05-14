@@ -16,6 +16,8 @@ import '../../core/widgets/app_bottom_nav_bar.dart';
 import '../../core/widgets/app_scaffold.dart';
 import '../../core/widgets/empty_state.dart';
 import '../../core/widgets/modern_card.dart';
+import '../disaster_mode/models/user_health_profile.dart';
+import '../user_profile/services/vulnerable_group_service.dart';
 
 class HouseholdProfilePage extends StatefulWidget {
   final String? gatewayId;
@@ -30,8 +32,6 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
   final GatewayService _gatewayService = GatewayService();
   final _formKey = GlobalKey<FormState>();
 
-  final TextEditingController _memberNameController = TextEditingController();
-  final TextEditingController _memberAgeController = TextEditingController();
   final TextEditingController _memberMedicalConditionController =
       TextEditingController();
   final TextEditingController _memberSpecialNeedController =
@@ -101,8 +101,6 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
     setState(() {
       _selectedGatewayId = gatewayId;
       _applyProfile(gatewayId);
-      _memberNameController.clear();
-      _memberAgeController.clear();
       _memberMedicalConditionController.clear();
       _memberSpecialNeedController.clear();
       _petNameController.clear();
@@ -118,8 +116,6 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
     setState(() {
       _selectedGatewayId = null;
       _applyProfile(null);
-      _memberNameController.clear();
-      _memberAgeController.clear();
       _memberMedicalConditionController.clear();
       _memberSpecialNeedController.clear();
       _petNameController.clear();
@@ -142,8 +138,6 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
 
   @override
   void dispose() {
-    _memberNameController.dispose();
-    _memberAgeController.dispose();
     _memberMedicalConditionController.dispose();
     _memberSpecialNeedController.dispose();
     _petNameController.dispose();
@@ -153,37 +147,6 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
     _contactPhoneController.dispose();
     _contactRelationshipController.dispose();
     super.dispose();
-  }
-
-  void _addMember() {
-    final name = _memberNameController.text.trim();
-    final ageStr = _memberAgeController.text.trim();
-    final age = int.tryParse(ageStr);
-
-    if (name.isEmpty || age == null || age < 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Lütfen isim ve yaş girin'),
-          backgroundColor: AppColors.warning,
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      _members.add(
-        HouseholdMember(
-          name: name,
-          age: age,
-          isChild: age < 18,
-          isElderly: age >= 65,
-          medicalConditions: [],
-          specialNeeds: [],
-        ),
-      );
-      _memberNameController.clear();
-      _memberAgeController.clear();
-    });
   }
 
   void _removeMember(int index) {
@@ -599,73 +562,50 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
     );
   }
 
-  void _showAddMemberSheet(BuildContext context) {
-    showModalBottomSheet(
+  Future<void> _showAddMemberSheet(BuildContext context) async {
+    final result = await showModalBottomSheet<_MemberAddResult>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(ctx).viewInsets.bottom,
-          left: 20,
-          right: 20,
-          top: 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Hane Üyesi Ekle', style: AppTypography.titleLarge(context)),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _memberNameController,
-              decoration: const InputDecoration(
-                labelText: 'İsim',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.person),
-              ),
-              autofocus: true,
-              textInputAction: TextInputAction.next,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _memberAgeController,
-              decoration: const InputDecoration(
-                labelText: 'Yaş',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.calendar_today),
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              textInputAction: TextInputAction.done,
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  final before = _members.length;
-                  _addMember();
-                  if (_members.length > before) Navigator.pop(ctx);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: const Text('Ekle'),
-              ),
-            ),
-            const SizedBox(height: 20),
-          ],
-        ),
-      ),
+      builder: (ctx) => _AddMemberSheet(existingMembers: _members),
     );
+
+    if (result == null || !mounted) return;
+
+    setState(() {
+      _members.add(
+        HouseholdMember(
+          name: result.name,
+          birthDate: result.birthDate,
+          gender: result.gender,
+          tcNumber: result.tcNumber,
+          bloodType: result.bloodType,
+          prosthetics: result.prosthetics.isEmpty ? null : result.prosthetics.toList(),
+          morningLocation: result.morningLocation,
+          noonLocation: result.noonLocation,
+          eveningLocation: result.eveningLocation,
+        ),
+      );
+    });
+
+    if (result.hasHealthData && _selectedGatewayId != null) {
+      final healthProfile = UserHealthProfile(
+        hasProfile: true,
+        age: _ageRangeFromBirthDate(result.birthDate),
+        gender: _genderFromString(result.gender),
+        chronicDiseases: result.diseases,
+        medications: result.medications,
+        disabilities: result.disabilities,
+      );
+      await VulnerableGroupService().saveMemberProfile(
+        _selectedGatewayId!,
+        result.name,
+        healthProfile,
+        true,
+      );
+    }
   }
 
   void _showAddPetSheet(BuildContext context) {
@@ -893,6 +833,9 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
   }
 
   Widget _buildMemberCard(HouseholdMember member, int index) {
+    final hasLocations = member.morningLocation != null ||
+        member.noonLocation != null ||
+        member.eveningLocation != null;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: ExpansionTile(
@@ -908,7 +851,19 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
           member.name,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text('${member.age} yaşında'),
+        subtitle: Row(
+          children: [
+            Text('${member.age} yaşında'),
+            if (hasLocations) ...[
+              const SizedBox(width: 8),
+              Icon(Icons.location_on, size: 14, color: AppColors.primary.withValues(alpha: 0.7)),
+              Text(
+                'Konum kayıtlı',
+                style: TextStyle(fontSize: 12, color: AppColors.primary.withValues(alpha: 0.7)),
+              ),
+            ],
+          ],
+        ),
         trailing: IconButton(
           icon: const Icon(Icons.delete, color: AppColors.danger),
           onPressed: () => _removeMember(index),
@@ -919,6 +874,20 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (hasLocations) ...[
+                  const Text(
+                    'Günlük Konumlar:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  const SizedBox(height: 8),
+                  if (member.morningLocation != null)
+                    _buildLocationRow(Icons.wb_sunny_outlined, 'Sabah', member.morningLocation!),
+                  if (member.noonLocation != null)
+                    _buildLocationRow(Icons.wb_cloudy_outlined, 'Öğlen', member.noonLocation!),
+                  if (member.eveningLocation != null)
+                    _buildLocationRow(Icons.nights_stay_outlined, 'Akşam', member.eveningLocation!),
+                  const SizedBox(height: 16),
+                ],
                 const Text(
                   'Tıbbi Durumlar:',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
@@ -1020,6 +989,23 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
     );
   }
 
+  Widget _buildLocationRow(IconData icon, String label, String address) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: AppColors.primary),
+          const SizedBox(width: 6),
+          Text('$label: ', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+          Expanded(
+            child: Text(address, style: const TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPetCard(Pet pet, int index) {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -1054,6 +1040,706 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
     );
   }
 }
+
+// ── Add Member Sheet ──────────────────────────────────────────────────────────
+
+const _kBloodTypes = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', '0+', '0-'];
+
+const _kDeviceOptions = [
+  'Tekerlekli sandalye',
+  'İşitme cihazı',
+  'Baston / yürüteç',
+  'Protez uzuv',
+  'Oksijen tüpü',
+  'Diyaliz cihazı',
+  'Görme yardımcısı',
+  'Diğer',
+];
+
+class _MemberAddResult {
+  final String name;
+  final String birthDate;
+  final String? gender;
+  final String? tcNumber;
+  final String? bloodType;
+  final Set<String> prosthetics;
+  final String? morningLocation;
+  final String? noonLocation;
+  final String? eveningLocation;
+  final bool hasHealthData;
+  final Set<ChronicDisease> diseases;
+  final Set<Medication> medications;
+  final Set<DisabilityStatus> disabilities;
+
+  _MemberAddResult({
+    required this.name,
+    required this.birthDate,
+    this.gender,
+    this.tcNumber,
+    this.bloodType,
+    this.prosthetics = const {},
+    this.morningLocation,
+    this.noonLocation,
+    this.eveningLocation,
+    required this.hasHealthData,
+    required this.diseases,
+    required this.medications,
+    required this.disabilities,
+  });
+}
+
+class _AddMemberSheet extends StatefulWidget {
+  const _AddMemberSheet({required this.existingMembers});
+  final List<HouseholdMember> existingMembers;
+
+  @override
+  State<_AddMemberSheet> createState() => _AddMemberSheetState();
+}
+
+class _AddMemberSheetState extends State<_AddMemberSheet> {
+  final _nameController = TextEditingController();
+  final _tcController = TextEditingController();
+  DateTime? _birthDate;
+  String? _gender;
+  String? _bloodType;
+  var _prosthetics = <String>{};
+  bool _isResponsible = false;
+  final _morningController = TextEditingController();
+  final _noonController = TextEditingController();
+  final _eveningController = TextEditingController();
+  var _diseases = <ChronicDisease>{};
+  var _medications = <Medication>{};
+  var _disabilities = <DisabilityStatus>{};
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _tcController.dispose();
+    _morningController.dispose();
+    _noonController.dispose();
+    _eveningController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime(now.year - 30),
+      firstDate: DateTime(1900),
+      lastDate: now,
+      locale: const Locale('tr', 'TR'),
+    );
+    if (picked != null) setState(() => _birthDate = picked);
+  }
+
+  String _formatDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
+
+  String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  void _submit() {
+    final name = _nameController.text.trim();
+    if (name.isEmpty || _birthDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('İsim ve doğum tarihi gerekli'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    final tc = _tcController.text.trim();
+
+    // TC format check
+    if (tc.isNotEmpty && tc.length != 11) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('TC kimlik numarası 11 haneli olmalıdır'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    // TC duplicate check
+    if (tc.isNotEmpty &&
+        widget.existingMembers.any(
+          (m) => m.tcNumber != null && m.tcNumber == tc,
+        )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Bu TC kimlik numarası ($tc) zaten kayıtlı'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    // Name duplicate check (case-insensitive)
+    if (widget.existingMembers.any(
+      (m) => m.name.toLowerCase() == name.toLowerCase(),
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('"$name" adında bir üye zaten mevcut'),
+          backgroundColor: AppColors.warning,
+        ),
+      );
+      return;
+    }
+
+    final hasHealthData = _diseases.isNotEmpty ||
+        _medications.isNotEmpty ||
+        _disabilities.isNotEmpty;
+    Navigator.pop(
+      context,
+      _MemberAddResult(
+        name: name,
+        birthDate: _isoDate(_birthDate!),
+        gender: _gender,
+        tcNumber: tc.isNotEmpty ? tc : null,
+        bloodType: _bloodType,
+        prosthetics: _prosthetics,
+        morningLocation: _isResponsible && _morningController.text.trim().isNotEmpty
+            ? _morningController.text.trim()
+            : null,
+        noonLocation: _isResponsible && _noonController.text.trim().isNotEmpty
+            ? _noonController.text.trim()
+            : null,
+        eveningLocation: _isResponsible && _eveningController.text.trim().isNotEmpty
+            ? _eveningController.text.trim()
+            : null,
+        hasHealthData: hasHealthData,
+        diseases: _diseases,
+        medications: _medications,
+        disabilities: _disabilities,
+      ),
+    );
+  }
+
+  Future<Set<T>?> _pickMulti<T>(
+    String title,
+    List<T> options,
+    Set<T> current,
+    String Function(T) label,
+  ) {
+    final selected = Set<T>.from(current);
+    return showDialog<Set<T>>(
+      context: context,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setDialog) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: options
+                  .map(
+                    (item) => CheckboxListTile(
+                      value: selected.contains(item),
+                      title: Text(label(item)),
+                      onChanged: (v) => setDialog(() {
+                        if (v == true) {
+                          selected.add(item);
+                        } else {
+                          selected.remove(item);
+                        }
+                      }),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dCtx),
+              child: const Text('İptal'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dCtx, selected),
+              child: const Text('Tamam'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPickerRow({
+    required IconData icon,
+    required String title,
+    required String summary,
+    required VoidCallback onTap,
+  }) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: theme.colorScheme.outline.withValues(alpha: 0.4),
+          ),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: AppColors.primary, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: AppTypography.bodyMedium(context)
+                        .copyWith(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    summary,
+                    style: AppTypography.bodySmall(context).copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: theme.colorScheme.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _selectionSummary<T>(Set<T> selected, String Function(T) label) {
+    if (selected.isEmpty) return 'Belirtilmedi';
+    return selected.map(label).join(', ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        maxChildSize: 0.95,
+        minChildSize: 0.5,
+        expand: false,
+        builder: (ctx, scrollController) => SingleChildScrollView(
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Sheet handle
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.outlineVariant,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text('Hane Üyesi Ekle', style: AppTypography.titleLarge(context)),
+              const SizedBox(height: 20),
+
+              // Name
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'İsim',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.person),
+                ),
+                autofocus: true,
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+
+              // Gender (Cinsiyet)
+              DropdownButtonFormField<String>(
+                value: _gender,
+                decoration: const InputDecoration(
+                  labelText: 'Cinsiyet',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.people_outline),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'male', child: Text('Erkek')),
+                  DropdownMenuItem(value: 'female', child: Text('Kadın')),
+                  DropdownMenuItem(value: 'unspecified', child: Text('Belirtmek İstemiyorum')),
+                ],
+                onChanged: (v) => setState(() => _gender = v),
+              ),
+              const SizedBox(height: 12),
+
+              // TC Kimlik No
+              TextFormField(
+                controller: _tcController,
+                decoration: const InputDecoration(
+                  labelText: 'TC Kimlik Numarası',
+                  hintText: '11 haneli benzersiz TC kimlik numarası (opsiyonel)',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.badge_outlined),
+                ),
+                keyboardType: TextInputType.number,
+                maxLength: 11,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                textInputAction: TextInputAction.next,
+              ),
+              const SizedBox(height: 12),
+
+              // Birth date picker
+              InkWell(
+                onTap: _pickDate,
+                borderRadius: BorderRadius.circular(4),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Doğum Tarihi',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.cake_outlined),
+                    suffixIcon: Icon(Icons.calendar_month_outlined),
+                  ),
+                  child: Text(
+                    _birthDate != null
+                        ? _formatDate(_birthDate!)
+                        : 'Seçiniz',
+                    style: _birthDate != null
+                        ? null
+                        : TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Blood type (Kan Grubu)
+              DropdownButtonFormField<String>(
+                value: _bloodType,
+                decoration: const InputDecoration(
+                  labelText: 'Kan Grubu',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.water_drop_outlined),
+                ),
+                items: _kBloodTypes
+                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                    .toList(),
+                onChanged: (v) => setState(() => _bloodType = v),
+              ),
+              const SizedBox(height: 24),
+
+              // Health section header
+              Row(
+                children: [
+                  const Icon(Icons.health_and_safety_outlined, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Sağlık Bilgileri',
+                    style: AppTypography.titleMedium(context)
+                        .copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '(İsteğe Bağlı)',
+                    style: AppTypography.bodySmall(context).copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              _buildPickerRow(
+                icon: Icons.monitor_heart_outlined,
+                title: 'Rahatsızlıklar',
+                summary: _selectionSummary(_diseases, _diseaseLabel),
+                onTap: () async {
+                  final result = await _pickMulti(
+                    'Rahatsızlıklar',
+                    ChronicDisease.values,
+                    _diseases,
+                    _diseaseLabel,
+                  );
+                  if (result != null) setState(() => _diseases = result);
+                },
+              ),
+              const SizedBox(height: 8),
+
+              _buildPickerRow(
+                icon: Icons.medication_outlined,
+                title: 'Kullandığı İlaçlar',
+                summary: _selectionSummary(_medications, _medLabel),
+                onTap: () async {
+                  final result = await _pickMulti(
+                    'Kullandığı İlaçlar',
+                    Medication.values,
+                    _medications,
+                    _medLabel,
+                  );
+                  if (result != null) setState(() => _medications = result);
+                },
+              ),
+              const SizedBox(height: 8),
+
+              _buildPickerRow(
+                icon: Icons.accessible_forward_outlined,
+                title: 'Engellilik Durumu',
+                summary: _selectionSummary(_disabilities, _disabilityLabel),
+                onTap: () async {
+                  final result = await _pickMulti(
+                    'Engellilik Durumu',
+                    DisabilityStatus.values
+                        .where((s) => s != DisabilityStatus.none)
+                        .toList(),
+                    _disabilities,
+                    _disabilityLabel,
+                  );
+                  if (result != null) setState(() => _disabilities = result);
+                },
+              ),
+              const SizedBox(height: 8),
+
+              _buildPickerRow(
+                icon: Icons.medical_services_outlined,
+                title: 'Kullandığı Protez / Cihazlar',
+                summary: _prosthetics.isEmpty
+                    ? 'Belirtilmedi'
+                    : _prosthetics.join(', '),
+                onTap: () async {
+                  final result = await _pickMulti<String>(
+                    'Kullandığı Protez / Cihazlar',
+                    _kDeviceOptions,
+                    _prosthetics,
+                    (s) => s,
+                  );
+                  if (result != null) setState(() => _prosthetics = result);
+                },
+              ),
+              const SizedBox(height: 24),
+
+              // "Bakmakla yükümlüyüm" button
+              InkWell(
+                onTap: () => setState(() => _isResponsible = !_isResponsible),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: _isResponsible
+                        ? AppColors.primary.withValues(alpha: 0.08)
+                        : theme.colorScheme.surfaceContainerHighest,
+                    border: Border.all(
+                      color: _isResponsible
+                          ? AppColors.primary
+                          : theme.colorScheme.outline.withValues(alpha: 0.3),
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.home_work_outlined,
+                        color: _isResponsible
+                            ? AppColors.primary
+                            : theme.colorScheme.onSurfaceVariant,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Bakmakla Yükümlüyüm',
+                              style: AppTypography.bodyMedium(context).copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: _isResponsible
+                                    ? AppColors.primary
+                                    : null,
+                              ),
+                            ),
+                            Text(
+                              'Telefonu olmayan yaşlı veya çocuk için konum bilgisi ekle',
+                              style: AppTypography.bodySmall(context).copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        _isResponsible
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Location fields (shown when responsible)
+              if (_isResponsible) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: theme.colorScheme.outline.withValues(alpha: 0.25),
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Genellikle Bulunduğu Konumlar',
+                        style: AppTypography.bodySmall(context).copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _morningController,
+                        decoration: const InputDecoration(
+                          labelText: 'Sabah Konumu',
+                          hintText: 'Örn: Ev — Bağcılar Cad. No:5',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.wb_sunny_outlined),
+                          isDense: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: _noonController,
+                        decoration: const InputDecoration(
+                          labelText: 'Öğlen Konumu',
+                          hintText: 'Örn: Okul — Atatürk İlkokulu',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.wb_cloudy_outlined),
+                          isDense: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: _eveningController,
+                        decoration: const InputDecoration(
+                          labelText: 'Akşam Konumu',
+                          hintText: 'Örn: Ev — Bağcılar Cad. No:5',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.nights_stay_outlined),
+                          isDense: true,
+                        ),
+                        textInputAction: TextInputAction.done,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: const Text('Ekle'),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Health profile converters ─────────────────────────────────────────────────
+
+AgeRange _ageRangeFromBirthDate(String birthDate) {
+  final birth = DateTime.tryParse(birthDate);
+  if (birth == null) return AgeRange.unknown;
+  final now = DateTime.now();
+  int age = now.year - birth.year;
+  if (now.month < birth.month ||
+      (now.month == birth.month && now.day < birth.day)) {
+    age--;
+  }
+  if (age < 0) return AgeRange.unknown;
+  if (age < 10) return AgeRange.child0to9;
+  if (age < 18) return AgeRange.teen10to17;
+  if (age < 30) return AgeRange.young18to29;
+  if (age < 45) return AgeRange.adult30to44;
+  if (age < 60) return AgeRange.range45to59;
+  if (age < 75) return AgeRange.senior60to74;
+  return AgeRange.elderly75plus;
+}
+
+Gender _genderFromString(String? gender) {
+  switch (gender) {
+    case 'male':
+      return Gender.male;
+    case 'female':
+      return Gender.female;
+    default:
+      return Gender.unknown;
+  }
+}
+
+// ── Label helpers ─────────────────────────────────────────────────────────────
+
+String _diseaseLabel(ChronicDisease d) => const {
+  ChronicDisease.heartDisease: 'Kalp hastalığı',
+  ChronicDisease.diabetes: 'Diyabet',
+  ChronicDisease.hypertension: 'Hipertansiyon',
+  ChronicDisease.asthma: 'Astım',
+  ChronicDisease.epilepsy: 'Epilepsi',
+  ChronicDisease.renalDisease: 'Böbrek hastalığı',
+  ChronicDisease.cancer: 'Kanser',
+  ChronicDisease.other: 'Diğer',
+}[d]!;
+
+String _medLabel(Medication m) => const {
+  Medication.bloodThinner: 'Kan sulandırıcı',
+  Medication.insulin: 'İnsülin',
+  Medication.heartMed: 'Kalp ilacı',
+  Medication.antiepileptic: 'Epilepsi ilacı',
+  Medication.immunosuppressant: 'Bağışıklık ilacı',
+  Medication.painKiller: 'Ağrı kesici',
+  Medication.other: 'Diğer',
+}[m]!;
+
+String _disabilityLabel(DisabilityStatus s) => const {
+  DisabilityStatus.none: 'Yok',
+  DisabilityStatus.mobility: 'Hareket kısıtlılığı',
+  DisabilityStatus.visual: 'Görme engeli',
+  DisabilityStatus.hearing: 'İşitme engeli',
+  DisabilityStatus.cognitive: 'Bilişsel engel',
+  DisabilityStatus.other: 'Diğer',
+}[s]!;
+
+// ── Dashed border painter ─────────────────────────────────────────────────────
 
 class _DashedBorderPainter extends CustomPainter {
   final Color color;

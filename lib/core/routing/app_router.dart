@@ -8,7 +8,6 @@ import '../../features/messages/messages_page.dart';
 import '../../features/settings/settings_page.dart';
 import '../../features/settings/profile_edit_page.dart';
 import '../../features/settings/issue_report_page.dart';
-import '../../features/settings/vulnerable_group_profile_page.dart';
 import '../../features/gateway_details/gateway_details_page.dart';
 import '../../features/household_profile/household_profile_page.dart';
 
@@ -22,7 +21,6 @@ class AppRouter {
   static const String settings = '/settings';
   static const String profileEdit = '/profile-edit';
   static const String issueReport = '/issue-report';
-  static const String vulnerableGroupProfile = '/vulnerable-group-profile';
   static const String gatewayDetails = '/gateway-details';
   static const String householdProfile = '/household-profile';
 
@@ -65,8 +63,6 @@ class AppRouter {
         );
       case issueReport:
         return _page(routeSettings, (_) => const IssueReportPage());
-      case vulnerableGroupProfile:
-        return _page(routeSettings, (_) => const VulnerableGroupProfilePage());
       case gatewayDetails:
         final gatewayId = routeSettings.arguments as String;
         return _page(

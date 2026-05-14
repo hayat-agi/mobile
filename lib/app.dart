@@ -7,6 +7,7 @@ import 'features/earthquake_detection/earthquake_detection_service.dart';
 import 'features/earthquake_detection/earthquake_state.dart';
 import 'features/earthquake_detection/widgets/earthquake_confirm_dialog.dart';
 import 'features/disaster_mode/services/battery_optimization_service.dart';
+import 'services/accessibility_service.dart';
 
 /// Navigator observer that activates/deactivates [BatteryOptimizationService]
 /// whenever the app enters or leaves the [AppRouter.disasterHome] route.
@@ -87,20 +88,44 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
-    final isAuthenticated =
-        AuthService().authState.value == AuthState.authenticated;
+    return ListenableBuilder(
+      listenable: AccessibilityService(),
+      builder: (context, _) {
+        final acc = AccessibilityService();
+        final isAuthenticated =
+            AuthService().authState.value == AuthState.authenticated;
 
-    return MaterialApp(
-      title: 'Hayat Ağı',
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
-      navigatorKey: _navigatorKey,
-      navigatorObservers: [_disasterObserver],
-      onGenerateRoute: AppRouter.generateRoute,
-      onGenerateInitialRoutes: AppRouter.generateInitialRoutes,
-      initialRoute: isAuthenticated ? AppRouter.dashboard : AppRouter.login,
-      debugShowCheckedModeBanner: false,
+        Widget app = MaterialApp(
+          title: 'Hayat Ağı',
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: acc.themeMode,
+          navigatorKey: _navigatorKey,
+          navigatorObservers: [_disasterObserver],
+          onGenerateRoute: AppRouter.generateRoute,
+          onGenerateInitialRoutes: AppRouter.generateInitialRoutes,
+          initialRoute:
+              isAuthenticated ? AppRouter.dashboard : AppRouter.login,
+          debugShowCheckedModeBanner: false,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(acc.fontScale),
+            ),
+            child: child!,
+          ),
+        );
+
+        if (acc.colorBlindMode) {
+          app = ColorFiltered(
+            colorFilter: const ColorFilter.matrix(
+              AccessibilityService.colorBlindMatrix,
+            ),
+            child: app,
+          );
+        }
+
+        return app;
+      },
     );
   }
 }

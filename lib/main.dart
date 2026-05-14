@@ -1,9 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'app.dart';
 import 'core/network/api_client.dart';
 import 'core/auth/auth_service.dart';
 import 'features/ble/ble_service.dart';
 import 'features/earthquake_detection/earthquake_detection_service.dart';
+import 'models/gateway.dart';
+import 'models/user.dart';
+import 'services/accessibility_service.dart';
+import 'services/gateway_service.dart';
 import 'services/earthquake_foreground_service.dart';
 
 void main() async {
@@ -14,6 +19,31 @@ void main() async {
 
   // Initialize auth (check stored token)
   await AuthService().initialize();
+
+  // Load persisted accessibility preferences
+  await AccessibilityService().load();
+
+  // DEBUG ONLY: seed fake auth + gateway so household profile is testable
+  // without a real backend or BLE device. Remove before release.
+  if (kDebugMode && AuthService().authState.value != AuthState.authenticated) {
+    AuthService().authState.value = AuthState.authenticated;
+    AuthService().currentUser.value = User(
+      id: 'debug-user',
+      name: 'Test',
+      surname: 'Kullanıcı',
+      email: 'test@hayatagi.com',
+    );
+    await GatewayService().initialize();
+    if (GatewayService().gateways.value.isEmpty) {
+      GatewayService().gateways.value = [
+        Gateway(
+          id: 'debug-gateway-001',
+          name: 'Test Cihazı',
+          status: GatewayStatus.disconnected,
+        ),
+      ];
+    }
+  }
 
   // Initialize the foreground service wrapper (Android only; no-op elsewhere).
   // Must be called before runApp so the notification channel is created and

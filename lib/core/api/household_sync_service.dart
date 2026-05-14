@@ -81,19 +81,9 @@ class HouseholdSyncService {
   }
 
   Map<String, dynamic> _memberToCitizenData(HouseholdMember member) {
-    final now = DateTime.now();
-    final estimatedBirthDate = DateTime(
-      now.year - member.age,
-      1,
-      1,
-    ).toIso8601String();
-    final birthDate = (member.birthDate != null && member.birthDate!.isNotEmpty)
-        ? member.birthDate!
-        : estimatedBirthDate;
-
     return {
       'fullname': member.name,
-      'birthDate': birthDate,
+      'birthDate': member.birthDate,
       'age': member.age,
       if (member.tcNumber != null) 'tcNumber': member.tcNumber,
       if (member.gender != null) 'gender': member.gender,

@@ -742,15 +742,13 @@ class _DashboardPageState extends State<DashboardPage> {
                       ? AppColors.warning
                       : AppColors.danger,
                 ),
-              if (gateway.connectedDeviceCount != null) ...[
-                const SizedBox(width: AppSpacing.sm),
-                _buildMetricChip(
-                  context: context,
-                  icon: Icons.phone_android,
-                  label: '${gateway.connectedDeviceCount} cihaz',
-                  color: AppColors.primary,
-                ),
-              ],
+              const SizedBox(width: AppSpacing.sm),
+              _buildMetricChip(
+                context: context,
+                icon: Icons.phone_android,
+                label: '${gateway.connectedDeviceCount ?? 0} cihaz',
+                color: AppColors.primary,
+              ),
               const Spacer(),
               // Last Seen
               if (gateway.lastSeen != null)

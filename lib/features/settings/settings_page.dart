@@ -10,6 +10,7 @@ import '../../core/widgets/app_bottom_nav_bar.dart';
 import '../../core/widgets/app_scaffold.dart';
 import '../../core/widgets/list_row.dart';
 import '../../core/widgets/section_header.dart';
+import '../../services/accessibility_service.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -119,21 +120,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(height: 1),
           SectionHeader(
-            title: 'Kırılgan Grup Profili',
-            subtitle: 'Afet modu sağlık önceliği',
+            title: 'Erişilebilirlik',
+            subtitle: 'Görünüm ve okuma kolaylığı',
           ),
-          ListRow(
-            title: 'Kırılgan Grup Profili',
-            subtitle: 'Yaş, hastalık, ilaç ve engellilik bilgileri',
-            leading: Icon(
-              Icons.health_and_safety_outlined,
-              color: theme.colorScheme.primary,
-            ),
-            onTap: () {
-              Navigator.pushNamed(context, AppRouter.vulnerableGroupProfile);
-            },
-            showDivider: false,
-          ),
+          _buildAccessibilitySection(theme),
           const Divider(height: 1),
           SectionHeader(
             title: 'Hakkında',
@@ -192,6 +182,108 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: null,
           ),
           const SizedBox(height: AppSpacing.xl),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccessibilitySection(ThemeData theme) {
+    final acc = AccessibilityService();
+    return ListenableBuilder(
+      listenable: acc,
+      builder: (context, _) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Dark mode
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.sm,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Tema', style: AppTypography.titleMedium(context)),
+                const SizedBox(height: 8),
+                SegmentedButton<ThemeMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      label: Text('Sistem'),
+                      icon: Icon(Icons.brightness_auto_outlined),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      label: Text('Açık'),
+                      icon: Icon(Icons.light_mode_outlined),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      label: Text('Koyu'),
+                      icon: Icon(Icons.dark_mode_outlined),
+                    ),
+                  ],
+                  selected: {acc.themeMode},
+                  onSelectionChanged: (s) => acc.setThemeMode(s.first),
+                  style: ButtonStyle(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, indent: AppSpacing.screenPadding),
+
+          // Font scale
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.sm,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Yazı Boyutu', style: AppTypography.titleMedium(context)),
+                const SizedBox(height: 8),
+                SegmentedButton<double>(
+                  segments: const [
+                    ButtonSegment(value: 1.0, label: Text('Normal')),
+                    ButtonSegment(value: 1.2, label: Text('Büyük')),
+                    ButtonSegment(value: 1.5, label: Text('Çok Büyük')),
+                  ],
+                  selected: {acc.fontScale},
+                  onSelectionChanged: (s) => acc.setFontScale(s.first),
+                  style: ButtonStyle(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, indent: AppSpacing.screenPadding),
+
+          // Color blind mode
+          SwitchListTile(
+            title: Text(
+              'Renk Körlüğü Modu',
+              style: AppTypography.titleMedium(context),
+            ),
+            subtitle: Text(
+              'Kırmızı-yeşil renk körlerine uyumlu renk filtresi',
+              style: AppTypography.bodySmall(context)
+                  .copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            secondary: Icon(
+              Icons.palette_outlined,
+              color: theme.colorScheme.primary,
+            ),
+            value: acc.colorBlindMode,
+            onChanged: acc.setColorBlindMode,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.screenPadding,
+              vertical: AppSpacing.xs,
+            ),
+          ),
         ],
       ),
     );
