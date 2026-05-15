@@ -301,7 +301,10 @@ class BleConnection extends GetxController {
           }
         }
       });
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 5),
+        androidUsesFineLocation: false,
+      );
 
       final result = await foundC.future.timeout(
         const Duration(seconds: 5),
