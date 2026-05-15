@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: dart analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: pub get
+        run: flutter pub get
+
+      - name: dart analyze
+        # Surfaces compile-blocking errors and warnings on every PR.
+        # The repo has pre-existing info-level lints (file_names, etc.) —
+        # so we don't pass --fatal-infos. Tighten later once those are fixed.
+        run: dart analyze --fatal-warnings
