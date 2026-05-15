@@ -164,14 +164,14 @@ class BleConnection extends GetxController {
     _lastDeviceId = deviceId;
   }
 
-  Future<void> _queueMessage(String text) async {
+  Future<void> _queueMessage(String text, {bool silent = false}) async {
     if (_messageQueue.length >= BleConstants.maxQueueSize) {
       final dropped = _messageQueue.removeAt(0);
       messages.add('[System] Kuyruk dolu — eski mesaj silindi: $dropped');
     }
     _messageQueue.add(text);
     await _persistQueue();
-    messages.add('ME: $text');
+    if (!silent) messages.add('ME: $text');
     unawaited(_reconnectAndDrainQueue());
   }
 
@@ -1280,10 +1280,12 @@ class BleConnection extends GetxController {
     }
 
     // If connected, try raw binary first (fastest path)
+    var alreadyLogged = false;
     if (isConnected.value && _rx != null) {
       final success = await sendHexPayload(payload);
       if (success) return;
-      // Direct send failed — fall through to queue
+      // Direct send failed — fall through to queue; sendHexPayload already logged
+      alreadyLogged = true;
     }
 
     // Encode as hex and queue with full retry/persistence support.
@@ -1300,7 +1302,7 @@ class BleConnection extends GetxController {
       );
     }
 
-    await _queueMessage(encoded);
+    await _queueMessage(encoded, silent: alreadyLogged);
   }
 
   /// Registers this phone with the ESP32 using a stable app-provided ID.

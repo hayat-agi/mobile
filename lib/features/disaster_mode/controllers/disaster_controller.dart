@@ -70,6 +70,7 @@ class DisasterController extends GetxController {
     _bleService.bleConnection.setLastDeviceId(gatewayId);
 
     isSending.value = true;
+    final wasConnected = isConnected;
     try {
       HouseholdProfile? household;
       household = GatewayService().getHouseholdProfile(gatewayId);
@@ -83,7 +84,7 @@ class DisasterController extends GetxController {
       lastSendSuccess.value = true;
 
       var syncedToBackend = false;
-      if (!isConnected) {
+      if (!wasConnected) {
         final phoneId = await DevicePasswordService()
             .getOrCreateStableDeviceId();
         final gateway = GatewayService().getGateway(gatewayId);
@@ -122,7 +123,7 @@ class DisasterController extends GetxController {
 
       return DisasterSendResult(
         sentOrQueued: true,
-        syncedToBackend: syncedToBackend || isConnected,
+        syncedToBackend: syncedToBackend || wasConnected,
       );
     } catch (_) {
       lastSendSuccess.value = false;

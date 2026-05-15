@@ -158,6 +158,7 @@ class _EarthquakeConfirmDialogState extends State<EarthquakeConfirmDialog> {
                       child: OutlinedButton(
                         onPressed: _onCancel,
                         style: OutlinedButton.styleFrom(
+                          backgroundColor: Colors.transparent,
                           foregroundColor: Colors.white,
                           side: const BorderSide(color: Colors.white54),
                           padding: const EdgeInsets.symmetric(vertical: 16),
