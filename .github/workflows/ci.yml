@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: dart analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: pub get
+        run: flutter pub get
+
+      - name: dart analyze (lib/, errors only)
+        # Scope to lib/ so pre-existing breakage in test/ doesn't block PRs.
+        # --no-fatal-warnings: only fail on real errors, not on the handful
+        # of pre-existing unused-import / unused_element_parameter warnings
+        # in activation_dialog.dart, add_gateway_bottom_sheet.dart, and
+        # household_profile_page.dart. Drop the flag once those are cleaned.
+        run: dart analyze lib/ --no-fatal-warnings
