@@ -586,6 +586,24 @@ class _HouseholdProfilePageState extends State<HouseholdProfilePage> {
           morningLocation: result.morningLocation,
           noonLocation: result.noonLocation,
           eveningLocation: result.eveningLocation,
+          medicalConditions: [
+            for (final d in result.diseases)
+              if (d == ChronicDisease.other)
+                result.otherDiseaseText.isNotEmpty
+                    ? 'Diğer: ${result.otherDiseaseText}'
+                    : 'Diğer'
+              else
+                _diseaseLabel(d),
+          ],
+          specialNeeds: [
+            for (final d in result.disabilities)
+              if (d == DisabilityStatus.other)
+                result.otherDisabilityText.isNotEmpty
+                    ? 'Diğer: ${result.otherDisabilityText}'
+                    : 'Diğer'
+              else
+                _disabilityLabel(d),
+          ],
         ),
       );
     });
@@ -1070,6 +1088,9 @@ class _MemberAddResult {
   final Set<ChronicDisease> diseases;
   final Set<Medication> medications;
   final Set<DisabilityStatus> disabilities;
+  final String otherDiseaseText;
+  final String otherMedText;
+  final String otherDisabilityText;
 
   _MemberAddResult({
     required this.name,
@@ -1085,6 +1106,9 @@ class _MemberAddResult {
     required this.diseases,
     required this.medications,
     required this.disabilities,
+    this.otherDiseaseText = '',
+    this.otherMedText = '',
+    this.otherDisabilityText = '',
   });
 }
 
@@ -1107,6 +1131,9 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
   final _morningController = TextEditingController();
   final _noonController = TextEditingController();
   final _eveningController = TextEditingController();
+  final _otherDiseaseController = TextEditingController();
+  final _otherMedController = TextEditingController();
+  final _otherDisabilityController = TextEditingController();
   var _diseases = <ChronicDisease>{};
   var _medications = <Medication>{};
   var _disabilities = <DisabilityStatus>{};
@@ -1118,6 +1145,9 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
     _morningController.dispose();
     _noonController.dispose();
     _eveningController.dispose();
+    _otherDiseaseController.dispose();
+    _otherMedController.dispose();
+    _otherDisabilityController.dispose();
     super.dispose();
   }
 
@@ -1128,7 +1158,6 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
       initialDate: DateTime(now.year - 30),
       firstDate: DateTime(1900),
       lastDate: now,
-      locale: const Locale('tr', 'TR'),
     );
     if (picked != null) setState(() => _birthDate = picked);
   }
@@ -1216,6 +1245,15 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
         diseases: _diseases,
         medications: _medications,
         disabilities: _disabilities,
+        otherDiseaseText: _diseases.contains(ChronicDisease.other)
+            ? _otherDiseaseController.text.trim()
+            : '',
+        otherMedText: _medications.contains(Medication.other)
+            ? _otherMedController.text.trim()
+            : '',
+        otherDisabilityText: _disabilities.contains(DisabilityStatus.other)
+            ? _otherDisabilityController.text.trim()
+            : '',
       ),
     );
   }
@@ -1224,8 +1262,9 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
     String title,
     List<T> options,
     Set<T> current,
-    String Function(T) label,
-  ) {
+    String Function(T) label, {
+    TextEditingController? otherController,
+  }) {
     final selected = Set<T>.from(current);
     return showDialog<Set<T>>(
       context: context,
@@ -1237,17 +1276,42 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
               mainAxisSize: MainAxisSize.min,
               children: options
                   .map(
-                    (item) => CheckboxListTile(
-                      value: selected.contains(item),
-                      title: Text(label(item)),
-                      onChanged: (v) => setDialog(() {
-                        if (v == true) {
-                          selected.add(item);
-                        } else {
-                          selected.remove(item);
-                        }
-                      }),
-                    ),
+                    (item) {
+                      final isOther = label(item) == 'Diğer';
+                      final isSelected = selected.contains(item);
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CheckboxListTile(
+                            value: isSelected,
+                            title: Text(label(item)),
+                            onChanged: (v) => setDialog(() {
+                              if (v == true) {
+                                selected.add(item);
+                              } else {
+                                selected.remove(item);
+                              }
+                            }),
+                          ),
+                          if (isOther && isSelected && otherController != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                left: 16,
+                                right: 16,
+                                bottom: 8,
+                              ),
+                              child: TextField(
+                                controller: otherController,
+                                decoration: const InputDecoration(
+                                  hintText: 'Belirtiniz...',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
                   )
                   .toList(),
             ),
@@ -1463,13 +1527,20 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
               _buildPickerRow(
                 icon: Icons.monitor_heart_outlined,
                 title: 'Rahatsızlıklar',
-                summary: _selectionSummary(_diseases, _diseaseLabel),
+                summary: _selectionSummary(
+                  _diseases,
+                  (d) => d == ChronicDisease.other &&
+                          _otherDiseaseController.text.isNotEmpty
+                      ? 'Diğer: ${_otherDiseaseController.text}'
+                      : _diseaseLabel(d),
+                ),
                 onTap: () async {
                   final result = await _pickMulti(
                     'Rahatsızlıklar',
                     ChronicDisease.values,
                     _diseases,
                     _diseaseLabel,
+                    otherController: _otherDiseaseController,
                   );
                   if (result != null) setState(() => _diseases = result);
                 },
@@ -1479,13 +1550,20 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
               _buildPickerRow(
                 icon: Icons.medication_outlined,
                 title: 'Kullandığı İlaçlar',
-                summary: _selectionSummary(_medications, _medLabel),
+                summary: _selectionSummary(
+                  _medications,
+                  (m) => m == Medication.other &&
+                          _otherMedController.text.isNotEmpty
+                      ? 'Diğer: ${_otherMedController.text}'
+                      : _medLabel(m),
+                ),
                 onTap: () async {
                   final result = await _pickMulti(
                     'Kullandığı İlaçlar',
                     Medication.values,
                     _medications,
                     _medLabel,
+                    otherController: _otherMedController,
                   );
                   if (result != null) setState(() => _medications = result);
                 },
@@ -1495,7 +1573,13 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
               _buildPickerRow(
                 icon: Icons.accessible_forward_outlined,
                 title: 'Engellilik Durumu',
-                summary: _selectionSummary(_disabilities, _disabilityLabel),
+                summary: _selectionSummary(
+                  _disabilities,
+                  (s) => s == DisabilityStatus.other &&
+                          _otherDisabilityController.text.isNotEmpty
+                      ? 'Diğer: ${_otherDisabilityController.text}'
+                      : _disabilityLabel(s),
+                ),
                 onTap: () async {
                   final result = await _pickMulti(
                     'Engellilik Durumu',
@@ -1504,6 +1588,7 @@ class _AddMemberSheetState extends State<_AddMemberSheet> {
                         .toList(),
                     _disabilities,
                     _disabilityLabel,
+                    otherController: _otherDisabilityController,
                   );
                   if (result != null) setState(() => _disabilities = result);
                 },
