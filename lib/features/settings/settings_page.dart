@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/auth/auth_service.dart';
 import '../../core/routing/app_router.dart';
@@ -11,6 +12,7 @@ import '../../core/widgets/app_scaffold.dart';
 import '../../core/widgets/list_row.dart';
 import '../../core/widgets/section_header.dart';
 import '../../services/accessibility_service.dart';
+import '../../services/gateway_service.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -21,13 +23,14 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   bool _notificationsEnabled = true;
-  bool _autoConnect = false;
+  bool _autoConnect = true;
   String _appVersion = '1.0.0';
 
   @override
   void initState() {
     super.initState();
     _loadAppVersion();
+    _loadPrefs();
   }
 
   Future<void> _loadAppVersion() async {
@@ -38,6 +41,21 @@ class _SettingsPageState extends State<SettingsPage> {
         _appVersion = packageInfo.version;
       });
     } catch (_) {}
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _autoConnect = prefs.getBool(GatewayService.autoConnectKey) ?? true;
+    });
+  }
+
+  Future<void> _setAutoConnect(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(GatewayService.autoConnectKey, value);
+    if (!mounted) return;
+    setState(() => _autoConnect = value);
   }
 
   @override
@@ -108,11 +126,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ).copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             value: _autoConnect,
-            onChanged: (value) {
-              setState(() {
-                _autoConnect = value;
-              });
-            },
+            onChanged: _setAutoConnect,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: AppSpacing.screenPadding,
               vertical: AppSpacing.sm,
