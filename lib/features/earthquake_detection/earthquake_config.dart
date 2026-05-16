@@ -35,7 +35,8 @@ class EarthquakeConfig {
   /// STA/LTA ratio threshold that flags a suspicious event.
   /// Lowered from 3.0 to 2.8 to capture borderline M5+ events whose maxRatio
   /// reaches ~2.99. Still well above hand-held noise (typically peaks 2.0–2.5).
-  static const double staLtaTriggerThreshold = 2.8;
+  /// production: 2.8
+  static const double staLtaTriggerThreshold = 2.4;
 
   // ── Rolling-window trigger gate ─────────────────────────────────────────────
   //
@@ -58,7 +59,8 @@ class EarthquakeConfig {
   /// Minimum number of above-threshold samples in [triggerWindowSamples]
   /// before Layer 2 is invoked. 18/50 = 36 % — raised from 15 to require
   /// more sustained exceedance while still allowing sparse ratio peaks.
-  static const int minTriggersInWindow = 18;
+  /// production: 18
+  static const int minTriggersInWindow = 14;
 
   // ── Noise floor ─────────────────────────────────────────────────────────────
 
@@ -95,17 +97,20 @@ class EarthquakeConfig {
 
   /// IQR threshold (m/s²). Raised from 0.2 to 0.35 for stronger earthquake focus.
   /// Strong events produce IQR > 0.5 m/s²; hand-held noise stays below 0.3.
-  static const double iqrThreshold = 0.35;
+  /// production: 0.35
+  static const double iqrThreshold = 0.20;
 
   /// Zero-crossing rate (ZC) threshold (crossings per second).
   /// Strong earthquake signals have rich oscillatory content at 1–10 Hz
   /// producing ZC > 5 crossings/s. Raised from 3.0 to cut marginal events.
-  static const double zcThreshold = 4.0;
+  /// production: 4.0
+  static const double zcThreshold = 2.5;
 
   /// Cumulative Absolute Velocity threshold (m/s²·s).
   /// Lowered from 0.70 to 0.55 to capture BALB-station M5+ events that produce
   /// CAV 0.62–0.68. Still well above typical daily-activity noise levels.
-  static const double cavThreshold = 0.55;
+  /// production: 0.55
+  static const double cavThreshold = 0.30;
 
   // ── Stationarity Gate ────────────────────────────────────────────────────────
   //
@@ -123,7 +128,8 @@ class EarthquakeConfig {
   /// Below this → phone is on a stable surface → detection is meaningful.
   /// Above this → phone is likely hand-held/moving → suppress triggers.
   /// Set to 0.009 to match the MyShake paper value (Kong et al., 2016).
-  static const double stationarityVarianceThreshold = 0.009;
+  /// production: 0.009
+  static const double stationarityVarianceThreshold = 1.0;
 
   // ── Gyroscope Veto ──────────────────────────────────────────────────────────
   //
@@ -136,7 +142,8 @@ class EarthquakeConfig {
 
   /// Maximum angular velocity (rad/s) allowed during detection.
   /// If gyroscope exceeds this, the trigger is vetoed as human activity.
-  static const double gyroscopeVetoThreshold = 0.35;
+  /// production: 0.35
+  static const double gyroscopeVetoThreshold = 5.0;
 
   /// Window for tracking recent peak gyroscope reading (samples at 25 Hz).
   static const int gyroscopeWindowSamples = samplesPerSecond * 2; // 50
@@ -183,7 +190,8 @@ class EarthquakeConfig {
   /// Set at 0.05 to allow legitimate seismic signals through while still
   /// catching extreme hand-held contamination. The stationarity gate and
   /// gyroscope veto are the primary phone-side FP defenses.
-  static const double ltaMaxVariance = 0.05;
+  /// production: 0.05
+  static const double ltaMaxVariance = 0.2;
 
   // ── Cooldown ────────────────────────────────────────────────────────────────
 

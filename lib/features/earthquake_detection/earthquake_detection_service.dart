@@ -79,6 +79,7 @@ class EarthquakeDetectionService {
   Timer? _cooldownTimer;
   bool _inCooldown = false;
   bool get _usingExternalStream => _externalSubscription != null;
+  bool get isUsingExternalStream => _externalSubscription != null;
 
   /// Rolling window of booleans: was STA/LTA above threshold for each sample?
   /// Maintained at a fixed size of [EarthquakeConfig.triggerWindowSamples].
@@ -242,9 +243,8 @@ class EarthquakeDetectionService {
     _cooldownTimer?.cancel();
     _cooldownTimer = null;
 
-    // Restart phone sensor monitoring from scratch
+    // Phone sensor fallback disabled — ESP32 is the only detection source.
     monitorState.value = EarthquakeMonitorState.idle;
-    start();
   }
 
   /// Release all resources. Call only when the service will never be used again.

@@ -8,6 +8,8 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     as fln;
 
+import 'eq_task_handler.dart';
+
 /// Manages the Android foreground service that keeps the Flutter engine —
 /// and therefore the BLE connection + earthquake detection pipeline — alive
 /// while the app is in the background or "closed" by the user.
@@ -15,12 +17,11 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart'
 /// This class is Android-only and is a no-op on any other platform.
 ///
 /// Architecture note:
-///   The TaskHandler isolate pattern from flutter_foreground_task is NOT used
-///   here because BLE (flutter_blue_plus) and the entire detection pipeline
-///   run exclusively in the main isolate. All we need is the persistent
-///   foreground Service declaration so Android does not kill the process.
-///   The `callback` parameter of startService is omitted intentionally so
-///   no separate isolate is spawned.
+///   [startTaskCallback] / [EqTaskHandler] run in the flutter_foreground_task
+///   isolate.  When the user task-kills the app, Android restarts the
+///   ForegroundService (stopWithTask="false") and flutter_foreground_task
+///   re-launches that isolate, which reconnects to the ESP32 via BLE and
+///   resumes the full earthquake detection pipeline without any UI.
 class EarthquakeForegroundService {
   // ── Singleton ────────────────────────────────────────────────────────────
   static final EarthquakeForegroundService _instance =
@@ -61,7 +62,7 @@ class EarthquakeForegroundService {
         showNotification: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.nothing(),
+        eventAction: ForegroundTaskEventAction.repeat(8000),
         allowWakeLock: true,
         allowWifiLock: false,
         allowAutoRestart: true,
@@ -119,6 +120,7 @@ class EarthquakeForegroundService {
       serviceTypes: [ForegroundServiceTypes.connectedDevice],
       notificationTitle: 'Hayat Ağı',
       notificationText: 'Deprem algılama aktif',
+      callback: startTaskCallback,
     );
 
     if (result is ServiceRequestSuccess) {
