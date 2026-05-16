@@ -30,6 +30,7 @@ class AddGatewayBottomSheet extends StatefulWidget {
     String? postalCode,
     double? latitude,
     double? longitude,
+    String? bleAdvName,
   ) onAdd;
 
   const AddGatewayBottomSheet({
@@ -59,6 +60,11 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
   bool _isSelectingDevice = false;
   double? _latitude;
   double? _longitude;
+  // Raw advertisement name captured from the BLE peripheral on connect
+  // (e.g., "ESP32_LifeNet_Node_3"). Kept separate from the editable form
+  // name so we can still derive the LoRa address even if the operator
+  // renames the gateway to something custom.
+  String? _bleAdvName;
 
   @override
   void initState() {
@@ -236,6 +242,14 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
 
     // Fill in the Gateway ID field automatically
     _gatewayIdController.text = deviceId;
+
+    // Remember the BLE-advertised name as-is so the backend can derive
+    // the LoRa address from it (the firmware embeds the node number via
+    // DEVICE_NAME, e.g., "ESP32_LifeNet_Node_3"). The operator may later
+    // edit the form name field; this raw value stays untouched.
+    if (deviceName.isNotEmpty) {
+      _bleAdvName = deviceName;
+    }
 
     // Use the device name if user hasn't typed a custom name
     if (_nameController.text.isEmpty && deviceName.isNotEmpty) {
@@ -537,6 +551,7 @@ class _AddGatewayBottomSheetState extends State<AddGatewayBottomSheet> {
       _postalCodeController.text.trim(),
       _latitude,
       _longitude,
+      _bleAdvName,
     );
 
     Navigator.pop(context);

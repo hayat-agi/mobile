@@ -168,6 +168,19 @@ class GatewayService {
     }
   }
 
+  // Parse the LoRa node address out of a BLE advertisement name. The firmware
+  // embeds it via DEVICE_NAME like "ESP32_LifeNet_Node_3" → 0x0003. Returns
+  // null on names that don't match (legacy firmware, custom names) so the
+  // backend will simply leave loraAddress null.
+  static String? _loraAddressFromAdvName(String? advName) {
+    if (advName == null || advName.isEmpty) return null;
+    final match = RegExp(r'_Node_(\d+)$').firstMatch(advName);
+    if (match == null) return null;
+    final n = int.tryParse(match.group(1)!);
+    if (n == null || n < 0 || n > 0xFFFF) return null;
+    return '0x${n.toRadixString(16).padLeft(4, '0').toUpperCase()}';
+  }
+
   // Add a new gateway by ID
   Future<bool> addGateway(
     String gatewayId, {
@@ -182,6 +195,7 @@ class GatewayService {
     String? postalCode,
     double? latitude,
     double? longitude,
+    String? bleAdvName,
   }) async {
     final normalizedGatewayId = gatewayId.trim();
 
@@ -224,6 +238,11 @@ class GatewayService {
       longitude: longitude,
     );
 
+    // Derive the firmware's LoRa node address from the BLE advertised name
+    // captured at pairing time. Backend treats null as "unknown" so legacy
+    // firmware (or custom-renamed BLE peripherals) don't poison the field.
+    final loraAddress = _loraAddressFromAdvName(bleAdvName);
+
     try {
       await GatewayRepository().createGateway({
         // Backend requires unique serialNumber. Use the BLE MAC as the canonical
@@ -231,6 +250,7 @@ class GatewayService {
         // back to when :id isn't a Mongo ObjectId.
         'serialNumber': gateway.id,
         'name': gateway.name,
+        if (loraAddress != null) 'loraAddress': loraAddress,
         if (gateway.buildingType != null)
           'buildingType': gateway.buildingType!.name,
         if (gateway.street != null) 'street': gateway.street,

@@ -188,6 +188,7 @@ class _DashboardPageState extends State<DashboardPage> {
     String? postalCode,
     double? latitude,
     double? longitude,
+    String? bleAdvName,
   ) async {
     final finalName =
         name ??
@@ -206,6 +207,7 @@ class _DashboardPageState extends State<DashboardPage> {
       postalCode: postalCode,
       latitude: latitude,
       longitude: longitude,
+      bleAdvName: bleAdvName,
     );
 
     if (mounted) {
