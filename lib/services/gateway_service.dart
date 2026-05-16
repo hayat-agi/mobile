@@ -33,6 +33,7 @@ class GatewayService {
   static const int _locationCheckIntervalDays = 90;
 
   static const String _gatewaysStorageKey = 'persisted_gateways';
+  static const String autoConnectKey = 'auto_connect_enabled';
   static const String _householdProfilesStorageKey =
       'persisted_household_profiles';
   bool _initialized = false;
@@ -114,9 +115,17 @@ class GatewayService {
   }
 
   /// Helper to try connecting once when app starts.
-  /// Skips the attempt if BLE permissions have not been granted yet
-  /// (e.g. first launch) to avoid showing a spurious "Hata" status.
+  /// Skips the attempt if the user has disabled auto-connect, or if BLE
+  /// permissions have not been granted yet (e.g. first launch).
   Future<void> _autoConnectOnStartup(String id) async {
+    // Check user preference — default true (first install).
+    final prefs = await SharedPreferences.getInstance();
+    final enabled = prefs.getBool(autoConnectKey) ?? true;
+    if (!enabled) {
+      debugPrint('GatewayService: auto-connect disabled by user — skip');
+      return;
+    }
+
     // Wait a bit for the app to settle
     await Future.delayed(Duration(milliseconds: 2000 + Random().nextInt(3000)));
 

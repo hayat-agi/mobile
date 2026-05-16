@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:get/get.dart';
 import 'BLEConnectionManager.dart';
 import 'sensor_packet.dart';
 import '../../services/gateway_service.dart';
@@ -45,18 +44,21 @@ class BleService {
     _results = ValueNotifier(_bleConnection.results.toList());
     _messages = ValueNotifier(_bleConnection.messages.toList());
 
-    // Keep ValueNotifiers in sync with the GetX observables
-    ever(_bleConnection.isConnected, (v) => _isConnected.value = v);
-    ever(_bleConnection.isScanning, (v) => _isScanning.value = v);
-    ever(_bleConnection.isAuthenticated, (v) => _isAuthenticated.value = v);
-    ever(_bleConnection.needsActivation, (v) => _needsActivation.value = v);
-    ever(_bleConnection.status, (v) => _status.value = v);
+    // Keep ValueNotifiers in sync with the GetX observables.
+    // Use .listen() instead of ever() so these work in any Dart isolate
+    // (including the flutter_foreground_task background isolate) without
+    // requiring a GetX DI binding to be active.
+    _bleConnection.isConnected.listen((v) => _isConnected.value = v);
+    _bleConnection.isScanning.listen((v) => _isScanning.value = v);
+    _bleConnection.isAuthenticated.listen((v) => _isAuthenticated.value = v);
+    _bleConnection.needsActivation.listen((v) => _needsActivation.value = v);
+    _bleConnection.status.listen((v) => _status.value = v);
 
     _bleConnection.results.listen((value) {
       _results.value = List<ScanResult>.from(value);
     });
 
-    ever(_bleConnection.messages, (value) => _messages.value = value.toList());
+    _bleConnection.messages.listen((value) => _messages.value = value.toList());
   }
 
   // ── Getters for plain Flutter widgets ───────────────────────────
@@ -120,6 +122,25 @@ class BleService {
   /// Used for REQ-GW-05 automatic reconnection.
   Future<void> connectById(String deviceId) async {
     await _bleConnection.connectById(deviceId);
+  }
+
+  /// Background-safe reconnect: uses BluetoothDevice.fromId (no scan).
+  /// Use this from foreground service / TaskHandler where BLE scanning
+  /// is blocked by Android 10+ background restrictions.
+  Future<bool> backgroundReconnect(String deviceId) async {
+    if (deviceId.isEmpty) return false;
+    try {
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        await FlutterBluePlus.adapterState
+            .where((s) => s == BluetoothAdapterState.on)
+            .first
+            .timeout(const Duration(seconds: 5));
+      }
+      return await _bleConnection.backgroundReconnect(deviceId);
+    } catch (_) {
+      return false;
+    }
   }
 
   /// REQ-GW-05: Attempt to reconnect to a specific saved device.

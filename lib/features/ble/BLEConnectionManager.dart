@@ -1093,6 +1093,17 @@ class BleConnection extends GetxController {
 
   /// Fast reconnect using [BluetoothDevice.fromId] — skips scanning entirely.
   /// Used when the gateway was connected seconds ago and is still in range.
+  /// Also used from the background TaskHandler where BLE scanning is blocked.
+  Future<bool> backgroundReconnect(String deviceId) async {
+    if (isConnected.value && _device?.remoteId.str == deviceId) return true;
+    try {
+      await _directReconnect(deviceId);
+      return isConnected.value;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _directReconnect(String deviceId) async {
     _connectInProgress = true;
 
