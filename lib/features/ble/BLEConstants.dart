@@ -112,7 +112,7 @@ class BleConstants {
 
   /// Minimum backoff before the very first retry — gives the ESP32
   /// time to finish with whoever is connected right now.
-  static const Duration initialRetryDelay = Duration(seconds: 2);
+  static const Duration initialRetryDelay = Duration(seconds: 4);
 
   /// Max messages a single phone may send per connection cycle in
   /// disaster mode.  After this many it disconnects so the next
