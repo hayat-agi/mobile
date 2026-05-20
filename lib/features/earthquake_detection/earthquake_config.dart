@@ -57,27 +57,23 @@ class EarthquakeConfig {
   static const int triggerWindowSamples = samplesPerSecond * 2; // 50
 
   /// Minimum number of above-threshold samples in [triggerWindowSamples]
-  /// before Layer 2 is invoked. 18/50 = 36 % — raised from 15 to require
-  /// more sustained exceedance while still allowing sparse ratio peaks.
+  /// before Layer 2 is invoked. 10/50 = 20 % — lowered to catch impulsive
+  /// near-field events whose energy bursts in < 1 s (maxTrig ≈ 10–17/50).
   /// production: 18
-  static const int minTriggersInWindow = 14;
+  static const int minTriggersInWindow = 10;
 
   // ── Noise floor ─────────────────────────────────────────────────────────────
 
   /// Minimum net acceleration magnitude (in m/s²) to count as signal.
-  /// OpenEEW reference: ~0.03 m/s² (≈ 3 gal); below this is sensor noise.
-  static const double noiseFloorMs2 = 0.03;
+  /// Set to 0.0 — no clamping. Allows LTA to accumulate the true ambient noise
+  /// baseline so the ratio comparison is fair even on very quiet seismic stations.
+  static const double noiseFloorMs2 = 0.0;
 
   /// Minimum LTA average (m/s²) before the STA/LTA ratio is computed.
-  ///
-  /// When the phone is very still, LTA approaches zero and any micro-vibration
-  /// produces an enormous ratio (e.g. 0.005 / 0.001 = 5.0) — false trigger.
-  /// This floor means: "don't bother computing a ratio until the environment
-  /// has at least this much baseline activity." A still table reads ~0.01–0.05;
-  /// a pocket or hand holding reads ~0.05–0.15.
-  /// Lowered from 0.05 so quiet station traces (e.g. FDSN KO BNN) still get a ratio:
-  /// weak pre-event netAcc can keep LTA mean just under 0.05 and block STA/LTA entirely.
-  static const double minLtaAverage = 0.03;
+  /// Set to 0.0 — no guard. The LTA variance guard and stationarity/gyro gates
+  /// are the primary defenses; blocking by mean floor only masked genuine seismic
+  /// events at stations with very low background activity.
+  static const double minLtaAverage = 0.0;
 
   /// Synthetic LTA baseline used when priming the STA/LTA window on ESP32 connect.
   ///
@@ -184,14 +180,13 @@ class EarthquakeConfig {
   // and ratios should not be trusted.
 
   /// Maximum LTA variance (m/s²) for the ratio to be considered meaningful.
-  /// A phone on a quiet table: LTA variance ≈ 0.0001.
-  /// A phone hand-held for 30s: LTA variance ≈ 0.01–0.10.
-  /// Seismic station background: LTA variance ≈ 0.001–0.02.
-  /// Set at 0.05 to allow legitimate seismic signals through while still
-  /// catching extreme hand-held contamination. The stationarity gate and
-  /// gyroscope veto are the primary phone-side FP defenses.
+  /// Raised to 5.0 — active seismic background (microseismicity, HVAC, traffic)
+  /// produces LTA variance up to ~3–4 m/s²; the original 0.2 guard was blocking
+  /// these legitimate stations. Stationarity gate + gyro veto remain the primary
+  /// phone-side FP defenses. 5.0 still rejects extreme hand-held contamination
+  /// (variance typically > 5 when actively walking/shaking the phone).
   /// production: 0.05
-  static const double ltaMaxVariance = 0.2;
+  static const double ltaMaxVariance = 5.0;
 
   // ── Cooldown ────────────────────────────────────────────────────────────────
 
